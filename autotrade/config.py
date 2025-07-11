@@ -80,8 +80,8 @@ class Config:
     VOLUME_MULTIPLIER = float(os.getenv("VOLUME_MULTIPLIER", 1.2))  # For signal confirmation
 
     # New: Backtest Parameters (to avoid invalid interval/rate limits)
-    BACKTEST_DAYS = int(os.getenv("BACKTEST_DAYS", 150))  # Increased to 2 years for more data
-    BACKTEST_INTERVAL_MINUTES = int(os.getenv("BACKTEST_INTERVAL_MINUTES", 60))  # Finer interval
+    BACKTEST_DAYS = int(os.getenv("BACKTEST_DAYS", 2))  # Increased to 2 years for more data
+    BACKTEST_INTERVAL_MINUTES = int(os.getenv("BACKTEST_INTERVAL_MINUTES", 1))  # Finer interval
     FETCH_DELAY_SECONDS = float(os.getenv("FETCH_DELAY_SECONDS", 2.0))  # Delay between sequential fetches
 
     # New: API Interval Adjustment Mapping (accurate from Groww docs)
@@ -97,3 +97,15 @@ class Config:
 
     # New: Multi-Stock Trading Toggle
     MULTI_STOCK_TRADING_ENABLED = os.getenv("MULTI_STOCK_TRADING_ENABLED", True)  # Enable multi-stock signals
+
+    # MODIFIED: Optimizations for profit maximization
+    VOLUME_CONFIRMATION_MULTIPLIER = float(os.getenv("VOLUME_CONFIRMATION_MULTIPLIER", 1.2))  # For signal confirmation
+    VWAP_WINDOW = int(os.getenv("VWAP_WINDOW", 20))  # For new VWAP strategy
+    HEDGE_THRESHOLD = float(os.getenv("HEDGE_THRESHOLD", 0.05))  # For enhanced arbitrage
+
+    # NEW: Dynamic universe (list of NSE tickers for screening via GrowwAPI)
+    NSE_UNIVERSE = os.getenv("NSE_UNIVERSE", "RELIANCE,TCS,INFY,HDFCBANK,ICICIBANK,SBIN,AXISBANK,KOTAKBANK,INDUSINDBK,BAJFINANCE,BAJAJFINSV,WIPRO,HCLTECH,TECHM,MARUTI,M&M,HEROMOTOCO,EICHERMOT,TATAMOTORS,HINDALCO,JSWSTEEL,TATASTEEL,SUNPHARMA,DRREDDY,CIPLA,LUPIN,AUROPHARMA,DIVISLAB,ASIANPAINT,BERGEPAINT,ULTRACEMCO,GRASIM,HINDUNILVR,ITC,NESTLEIND,BRITANNIA,TATACONSUM,BPCL,HINDPETRO,ONGC,POWERGRID,NTPC,SBILIFE,HDFCLIFE").split(",")  # Expand this list as needed
+
+    # NEW: For LLM examiner (use Mistral for analysis)
+    OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "mistral")  # Changed default to Mistral for better suggestions
+    EXAMINER_ENABLED = os.getenv("EXAMINER_ENABLED", True)  # Toggle for post-backtest analysis

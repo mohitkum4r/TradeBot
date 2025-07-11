@@ -140,3 +140,12 @@ class DataHandler:
         except GrowwAPIException as e:
             print(f"Error fetching LTP for {stock}: {e}")
             raise
+
+    # NEW: Helper for ATR (used in risk management for profit maximization)
+    def get_atr(self, stock: str, days: int = 14, interval_minutes: int = 60) -> float:
+        df = self.get_historical_data(stock, days, interval_minutes)
+        if df.empty:
+            return 0.0
+        import ta  # Ensure ta is imported
+        atr = ta.volatility.AverageTrueRange(high=df["high"], low=df["low"], close=df["close"], window=14).average_true_range().iloc[-1]
+        return atr if not pd.isna(atr) else 0.0

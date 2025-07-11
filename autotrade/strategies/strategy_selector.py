@@ -1,4 +1,3 @@
-# autotrade/strategies/strategy_selector.py
 import pandas as pd
 import ta
 from ..config import Config
@@ -7,9 +6,12 @@ from .dual_ma_crossover_strategy import DualMaCrossoverStrategy
 from .mean_reversion_strategy import MeanReversionStrategy
 from .advanced_momentum_strategy import AdvancedMomentumStrategy
 from .dynamic_pairs_strategy import DynamicPairsStrategy
-from .volatility_breakout_strategy import VolatilityBreakoutStrategy  # New
-from .rsi_divergence_strategy import RSIDivergenceStrategy  # New
-from .statistical_arbitrage_strategy import StatisticalArbitrageStrategy  # New
+from .volatility_breakout_strategy import VolatilityBreakoutStrategy  # Assuming this exists from original
+from .rsi_divergence_strategy import RSIDivergenceStrategy  # Assuming this exists from original
+from .statistical_arbitrage_strategy import StatisticalArbitrageStrategy  # Assuming this exists from original
+# NEW: Imports for new strategies
+from .vwap_strategy import VWAPStrategy
+from .enhanced_arbitrage_strategy import EnhancedArbitrageStrategy
 
 
 class StrategySelector(BaseStrategy):
@@ -42,6 +44,10 @@ class StrategySelector(BaseStrategy):
         self.arbitrage_strategy: BaseStrategy = StatisticalArbitrageStrategy(
             pairs_list=Config.PAIRS_LIST
         )  # New
+
+        # NEW: Additional strategies for profit maximization
+        self.vwap_strategy = VWAPStrategy()
+        self.enhanced_arbitrage = EnhancedArbitrageStrategy(Config.PAIRS_LIST)
 
     def generate_signal(
         self, data: pd.DataFrame, **kwargs
@@ -87,17 +93,59 @@ class StrategySelector(BaseStrategy):
             print(f"Error during regime analysis: {e}. Returning HOLD.")
             return "HOLD", "", f"Regime analysis failed: {str(e)}"
 
+        # MODIFIED: Volume confirmation function with NaN/None handling and stock-specific data
+        def confirm_signal(signal_tuple, full_data, stock=None):
+            if isinstance(signal_tuple, list):
+                confirmed = []
+                for s in signal_tuple:
+                    stock, signal, reason = s  # Unpack for lists
+                    stock_data = full_data.get(stock) if isinstance(full_data, dict) else full_data[stock] if isinstance(full_data.columns, pd.MultiIndex) and stock in full_data.columns.levels[0] else None
+                    if stock_data is None or len(stock_data) < 10:  # Require min data for rolling (lowered from 20 for more signals)
+                        print(f"Skipping confirmation for {stock}: Insufficient or missing data.")
+                        continue  # Skip instead of HOLD to avoid blocking
+                    conf_s, conf_i, conf_r = confirm_signal((signal, '', reason), stock_data, stock)  # Recursive with stock_data
+                    if conf_s != "HOLD":
+                        confirmed.append((stock, conf_s, conf_r))
+                return confirmed if confirmed else [("HOLD", "", "All signals ignored: Low volume or data issues")]
+            elif isinstance(signal_tuple, tuple):
+                signal, instrument, reason = signal_tuple if len(signal_tuple) == 3 else (signal_tuple[0], "", signal_tuple[1])
+                confirm_data = full_data  # Use provided full_data (stock-specific if passed)
+                if "volume" not in confirm_data.columns:
+                    print(f"No volume data for {stock or instrument}. Allowing signal without volume check.")
+                    return signal, instrument, reason  # Allow if no volume data
+
+                current_vol = confirm_data["volume"].iloc[-1]
+                if pd.isna(current_vol):
+                    print(f"Current volume is NaN for {stock or instrument}. Allowing signal.")
+                    return signal, instrument, reason
+
+                # Compute avg_vol with handling for short data
+                if len(confirm_data) < 10:  # Lowered window for backtests with short data
+                    avg_vol = confirm_data["volume"].mean()  # Fallback to simple mean
+                else:
+                    avg_vol = confirm_data["volume"].rolling(10).mean().iloc[-1]  # Lowered to 10 for more valid computations
+
+                if pd.isna(avg_vol):
+                    print(f"Avg volume is NaN for {stock or instrument}. Allowing signal to avoid data blockage.")
+                    return signal, instrument, reason  # Allow signal if NaN
+
+                if current_vol < avg_vol * Config.VOLUME_CONFIRMATION_MULTIPLIER:
+                    return "HOLD", instrument, "Signal ignored: Low volume confirmation"
+                return signal, instrument, reason
+            return signal_tuple
+
         # --- Dynamic Strategy Selection ---
-        full_data = kwargs.get("full_stock_data", data)
+        full_stock_data = kwargs.get("full_stock_data", data)  # MODIFIED: Renamed for clarity, use dict or multi-index
         current_portfolio = kwargs.get("current_portfolio", [])
 
         if last_adx > self.strong_trend_threshold:
             print(
                 f"--- Market Regime: STRONG TREND (ADX: {last_adx:.2f}) -> Using Advanced Momentum Portfolio ---"
             )
-            return self.strong_trend_strategy.generate_signal(
-                full_data, current_portfolio=current_portfolio
+            signals = self.strong_trend_strategy.generate_signal(
+                full_stock_data, current_portfolio=current_portfolio
             )
+            return confirm_signal(signals, full_stock_data)
 
         elif last_adx > self.trend_threshold:
             print(
@@ -106,14 +154,16 @@ class StrategySelector(BaseStrategy):
             signals = []
             target_stocks = Config.STOCKS if Config.MULTI_STOCK_TRADING_ENABLED else [Config.STOCKS[0]] if Config.STOCKS else ["RELIANCE"]
             for stock in target_stocks:
-                # Check if stock data exists in full_data
-                if isinstance(full_data.columns, pd.MultiIndex):
-                    if stock not in full_data.columns.levels[0]:
+                # Check if stock data exists in full_stock_data
+                if isinstance(full_stock_data.columns, pd.MultiIndex):
+                    if stock not in full_stock_data.columns.levels[0]:
                         print(f"Skipping {stock}: Data not available in full_data.")
                         continue
-                    stock_data = full_data[stock]
+                    stock_data = full_stock_data[stock]
+                elif isinstance(full_stock_data, dict) and stock in full_stock_data:  # NEW: Handle dict case from DataHandler
+                    stock_data = full_stock_data[stock]
                 else:
-                    stock_data = full_data  # Fallback if not multi-index
+                    stock_data = full_stock_data  # Fallback
                 if len(stock_data) < max(Config.MA_SHORT_WINDOW, Config.MA_LONG_WINDOW) + 1:
                     print(f"Skipping {stock}: Insufficient data (need at least {max(Config.MA_SHORT_WINDOW, Config.MA_LONG_WINDOW) + 1} points).")
                     continue
@@ -121,39 +171,40 @@ class StrategySelector(BaseStrategy):
                 if signal != "HOLD":
                     signals.append((stock, signal, reason))
                     print(f"Generated signal for {stock}: {signal} | Reason: {reason}")
-            return signals if signals else ("HOLD", "", "No moderate trend signals across stocks.")
+            confirmed_signals = confirm_signal(signals, full_stock_data)  # Pass full_stock_data for lookup
+            return confirmed_signals if confirmed_signals else ("HOLD", "", "No moderate trend signals across stocks.")
 
         elif high_vol:
             print(
-                f"--- Market Regime: HIGH VOLATILITY (ATR: {atr:.2f}) -> Using Volatility Breakout or RSI Divergence ---"
+                f"--- Market Regime: HIGH VOLATILITY (ATR: {atr:.2f}) -> Using VWAP or Volatility Breakout ---"  # MODIFIED: Prioritize new VWAP
             )
-            # Choose between breakout and divergence based on sub-conditions
+            # NEW: Choose VWAP for high-vol to maximize profits
             if data["volume"].iloc[-1] > data["volume"].rolling(20).mean().iloc[-1] * 1.2:  # Added multiplier for more triggers
-                signal = self.vol_breakout_strategy.generate_signal(full_data)
-                print(f"Generated signal from Volatility Breakout: {signal}")
-                return signal
+                signal = self.vwap_strategy.generate_signal(full_stock_data)
             else:
-                signal = self.rsi_divergence_strategy.generate_signal(full_data)
-                print(f"Generated signal from RSI Divergence: {signal}")
-                return signal
+                signal = self.vol_breakout_strategy.generate_signal(full_stock_data)
+            return confirm_signal(signal, full_stock_data)
 
         elif last_adx < self.trend_threshold:
             print(
-                f"--- Market Regime: RANGE-BOUND / LOW TREND (ADX: {last_adx:.2f}) -> Using Mean Reversion or Arbitrage ---"
+                f"--- Market Regime: RANGE-BOUND / LOW TREND (ADX: {last_adx:.2f}) -> Using Enhanced Arbitrage or Mean Reversion ---"
             )
             if len(current_portfolio) > 0:  # If holding positions, prefer reversion
-                signal, reason = self.ranging_strategy.generate_signal(data)
+                # Use first portfolio stock's data for confirmation
+                first_stock = current_portfolio[0]
+                stock_data = full_stock_data.get(first_stock) if isinstance(full_stock_data, dict) else full_stock_data[first_stock] if isinstance(full_stock_data.columns, pd.MultiIndex) else data
+                signal, reason = self.ranging_strategy.generate_signal(stock_data)
                 print(f"Generated signal from Mean Reversion: {signal} | Reason: {reason}")
-                return current_portfolio[0], signal, reason  # Apply to first held stock
+                return confirm_signal((first_stock, signal, reason), stock_data)
             else:
-                signal = self.arbitrage_strategy.generate_signal(full_data)
-                print(f"Generated signal from Arbitrage: {signal}")
-                return signal
+                signal = self.enhanced_arbitrage.generate_signal(full_stock_data)
+                print(f"Generated signal from Enhanced Arbitrage: {signal}")
+                return confirm_signal(signal, full_stock_data)
 
         else:
             print(
                 f"--- Market Regime: RANGE-BOUND / LOW TREND (ADX: {last_adx:.2f}) -> Using Dynamic Pairs Trading ---"
             )
-            signal = self.pairs_trading_strategy.generate_signal(full_data)
+            signal = self.pairs_trading_strategy.generate_signal(full_stock_data)
             print(f"Generated signal from Pairs Trading: {signal}")
-            return signal
+            return confirm_signal(signal, full_stock_data)

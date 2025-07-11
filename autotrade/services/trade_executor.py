@@ -25,11 +25,15 @@ class BaseTradeExecutor(ABC):
         pass
 
     def _apply_risk_management(
-        self, price: float, quantity: int, capital: float
+        self, price: float, quantity: int, capital: float, stock: str
     ) -> int:
+        atr = self.data_handler.get_atr(stock)  # Fetch ATR using GrowwAPI
         risk_amount = capital * Config.RISK_PER_TRADE
         stop_loss_price = price * (1 - Config.STOP_LOSS_PCT)
         position_size = int(risk_amount / (price - stop_loss_price))
+        if atr > 0:
+            # Adjust size inversely to volatility for better risk control (profit max)
+            position_size = int(position_size / (atr / price))  # Normalize by % volatility
         return min(quantity, position_size)  # Cap at calculated size
 
     def _log_and_update_portfolio(
@@ -104,7 +108,8 @@ class LiveTradeExecutor(BaseTradeExecutor):
             print(f"Could not execute trade for {stock}, failed to get LTP.")
             return
 
-        quantity = self._apply_risk_management(ltp, quantity, capital)
+        # MODIFIED: Apply enhanced risk management
+        quantity = self._apply_risk_management(ltp, quantity, capital, stock)
 
         if signal == "BUY":
             self._execute_buy(stock, quantity, ltp, reason)
@@ -202,7 +207,8 @@ class PaperTradeExecutor(BaseTradeExecutor):
             print(f"Could not execute paper trade for {stock}, failed to get LTP.")
             return
 
-        quantity = self._apply_risk_management(ltp, quantity, capital)
+        # MODIFIED: Apply enhanced risk management
+        quantity = self._apply_risk_management(ltp, quantity, capital, stock)
 
         if signal == "BUY":
             print(f"EXECUTING PAPER BUY: {quantity} of {stock} @ ₹{ltp:.2f}")
