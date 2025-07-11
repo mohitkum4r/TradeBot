@@ -1,8 +1,6 @@
 # backtest.py
 import pandas as pd
 import numpy as np
-import ta
-
 from autotrade.strategies.base_strategy import BaseStrategy
 from autotrade.services.data_handler import DataHandler
 from autotrade.config import Config
@@ -16,15 +14,17 @@ def run_backtest(strategy: BaseStrategy, data_handler: DataHandler):
     print(f"\n--- Starting backtest for strategy: {strategy.__class__.__name__} ---")
 
     # Backtest on entire universe with configurable params to avoid API limits
-    stock_universe = Config.STOCKS
+    stock_universe = [s for s in Config.STOCKS]  # Copy to modify
     historical_data = data_handler.get_historical_data(
         stock_universe,
         days=Config.BACKTEST_DAYS,
         interval_minutes=Config.BACKTEST_INTERVAL_MINUTES
     )
 
-    if not historical_data:
-        print("Cannot run backtest, no historical data fetched.")
+    # Update universe to only include successfully fetched stocks
+    stock_universe = list(historical_data.keys())
+    if not stock_universe:
+        print("Cannot run backtest, no historical data fetched for any stock.")
         return
 
     # Fetch Nifty data separately for regime analysis (use correct Groww symbol for Nifty 50)
@@ -43,8 +43,9 @@ def run_backtest(strategy: BaseStrategy, data_handler: DataHandler):
     daily_values = []
     trailing_stop_pct = Config.STOP_LOSS_PCT
     take_profit_pct = Config.TAKE_PROFIT_PCT
+    trades = []  # List to track trades for metrics (e.g., [{'stock': 'ABC', 'entry_price': 100, 'exit_price': 110, 'pnl': 10, 'type': 'win'}])
 
-    print(f"Backtesting on {len(stock_universe)} stocks...")
+    print(f"Backtesting on {len(stock_universe)} stocks (fetched successfully)...")
 
     # Assume combined DataFrame for simplicity (handle missing stocks gracefully)
     combined_df = pd.concat({s: df for s, df in historical_data.items() if not df.empty}, axis=1)
@@ -100,6 +101,7 @@ def run_backtest(strategy: BaseStrategy, data_handler: DataHandler):
                             buy_prices[stock] = current_price
                             peak_prices[stock] = current_price  # Init peak for trailing
                             print(f"BUY {quantity} {stock} @ {current_price:.2f} | Reason: {reason}")
+                            trades.append({'stock': stock, 'entry_price': current_price, 'quantity': quantity, 'entry_step': i, 'taxes': taxes})
 
                 elif signal == "SELL" and positions[stock] > 0:
                     revenue = current_price * positions[stock] * 0.999  # Slippage
@@ -108,6 +110,9 @@ def run_backtest(strategy: BaseStrategy, data_handler: DataHandler):
                     cash += total_revenue
                     pnl = (current_price - buy_prices[stock]) * positions[stock] - taxes
                     print(f"SELL {positions[stock]} {stock} @ {current_price:.2f} | PnL: {pnl:.2f} | Reason: {reason}")
+                    # Record trade
+                    trade_type = 'win' if pnl > 0 else 'loss'
+                    trades.append({'stock': stock, 'exit_price': current_price, 'pnl': pnl, 'type': trade_type, 'exit_step': i, 'taxes': taxes})
                     positions[stock] = 0
 
         # Handle single tuple signals (e.g., from pairs)
@@ -134,6 +139,7 @@ def run_backtest(strategy: BaseStrategy, data_handler: DataHandler):
                         net = revenue - cost - taxes
                         cash += net
                         print(f"BUY_SPREAD: Long {qty1} {stock1} @ {price1:.2f}, Short {qty2} {stock2} @ {price2:.2f} | Net: {net:.2f} | Reason: {reason}")
+                        trades.append({'stock': f"{stock1}-{stock2}", 'entry_price': (price1, price2), 'quantity': (qty1, qty2), 'entry_step': i, 'taxes': taxes})
                     elif signal == "SELL_SPREAD":
                         # Short stock1, Long stock2
                         revenue = price1 * qty1 * 0.999  # Simulated short sell
@@ -142,6 +148,7 @@ def run_backtest(strategy: BaseStrategy, data_handler: DataHandler):
                         net = revenue - cost - taxes
                         cash += net
                         print(f"SELL_SPREAD: Short {qty1} {stock1} @ {price1:.2f}, Long {qty2} {stock2} @ {price2:.2f} | Net: {net:.2f} | Reason: {reason}")
+                        trades.append({'stock': f"{stock1}-{stock2}", 'entry_price': (price1, price2), 'quantity': (qty1, qty2), 'entry_step': i, 'taxes': taxes})
                     elif signal == "EXIT_SPREAD":
                         # Simulate closing spread (assume flat for simplicity)
                         print(f"EXIT_SPREAD: Closing {instrument} | Reason: {reason}")
@@ -175,6 +182,7 @@ def run_backtest(strategy: BaseStrategy, data_handler: DataHandler):
                             buy_prices[stock] = current_price
                             peak_prices[stock] = current_price  # Init peak for trailing
                             print(f"BUY {quantity} {stock} @ {current_price:.2f} | Reason: {reason}")
+                            trades.append({'stock': stock, 'entry_price': current_price, 'quantity': quantity, 'entry_step': i, 'taxes': taxes})
 
                 elif signal == "SELL" and positions[stock] > 0:
                     revenue = current_price * positions[stock] * 0.999  # Slippage
@@ -183,6 +191,9 @@ def run_backtest(strategy: BaseStrategy, data_handler: DataHandler):
                     cash += total_revenue
                     pnl = (current_price - buy_prices[stock]) * positions[stock] - taxes
                     print(f"SELL {positions[stock]} {stock} @ {current_price:.2f} | PnL: {pnl:.2f} | Reason: {reason}")
+                    # Record trade
+                    trade_type = 'win' if pnl > 0 else 'loss'
+                    trades.append({'stock': stock, 'exit_price': current_price, 'pnl': pnl, 'type': trade_type, 'exit_step': i, 'taxes': taxes})
                     positions[stock] = 0
 
         # Apply trailing stop and take-profit for open positions
@@ -201,6 +212,9 @@ def run_backtest(strategy: BaseStrategy, data_handler: DataHandler):
                     cash += total_revenue
                     pnl = (current_price - buy_prices[stock]) * positions[stock] - taxes
                     print(f"TRAILING STOP SELL {positions[stock]} {stock} @ {current_price:.2f} | PnL: {pnl:.2f}")
+                    # Record trade
+                    trade_type = 'win' if pnl > 0 else 'loss'
+                    trades.append({'stock': stock, 'exit_price': current_price, 'pnl': pnl, 'type': trade_type, 'exit_step': i, 'taxes': taxes})
                     positions[stock] = 0
                 # Take-profit
                 elif current_price > buy_prices[stock] * (1 + take_profit_pct):
@@ -210,6 +224,9 @@ def run_backtest(strategy: BaseStrategy, data_handler: DataHandler):
                     cash += total_revenue
                     pnl = (current_price - buy_prices[stock]) * positions[stock] - taxes
                     print(f"TAKE PROFIT SELL {positions[stock]} {stock} @ {current_price:.2f} | PnL: {pnl:.2f}")
+                    # Record trade
+                    trade_type = 'win' if pnl > 0 else 'loss'
+                    trades.append({'stock': stock, 'exit_price': current_price, 'pnl': pnl, 'type': trade_type, 'exit_step': i, 'taxes': taxes})
                     positions[stock] = 0
 
         # Update portfolio value (with compounding - cash is reinvested)
@@ -235,10 +252,39 @@ def run_backtest(strategy: BaseStrategy, data_handler: DataHandler):
 
     calmar_ratio = (returns.mean() * 252) / abs(max_drawdown) if max_drawdown != 0 else 0
 
+    # Additional Metrics
+    num_trades = len(trades)
+    if num_trades > 0:
+        wins = sum(1 for t in trades if 'pnl' in t and t['pnl'] > 0)
+        losses = sum(1 for t in trades if 'pnl' in t and t['pnl'] <= 0)
+        win_rate = (wins / num_trades) * 100 if num_trades > 0 else 0
+        avg_pnl = sum(t['pnl'] for t in trades if 'pnl' in t) / num_trades
+        avg_win = sum(t['pnl'] for t in trades if 'pnl' in t and t['pnl'] > 0) / wins if wins > 0 else 0
+        avg_loss = sum(t['pnl'] for t in trades if 'pnl' in t and t['pnl'] <= 0) / losses if losses > 0 else 0
+        expectancy = (win_rate / 100 * avg_win) - ((1 - win_rate / 100) * abs(avg_loss))
+        profit_factor = abs(sum(t['pnl'] for t in trades if 'pnl' in t and t['pnl'] > 0) / sum(abs(t['pnl']) for t in trades if 'pnl' in t and t['pnl'] <= 0)) if losses > 0 else np.inf
+        total_taxes = sum(t.get('taxes', 0) for t in trades)  # Assume taxes tracked in trades if needed
+    else:
+        win_rate = 0
+        avg_pnl = 0
+        avg_win = 0
+        avg_loss = 0
+        expectancy = 0
+        profit_factor = 0
+        total_taxes = 0
+
     print("\n--- Backtest Results ---")
     print(f"Initial Capital:       ₹{initial_capital:,.2f}")
     print(f"Final Portfolio Value:   ₹{final_portfolio_value:,.2f}")
     print(f"Total Profit/Loss:       ₹{total_pnl:,.2f} ({total_pnl_percent:.2f}%)")
+    print(f"Number of Trades:        {num_trades}")
+    print(f"Win Rate:                {win_rate:.2f}%")
+    print(f"Average PnL per Trade:   ₹{avg_pnl:.2f}")
+    print(f"Average Win:             ₹{avg_win:.2f}")
+    print(f"Average Loss:            ₹{avg_loss:.2f}")
+    print(f"Expectancy:              ₹{expectancy:.2f}")
+    print(f"Profit Factor:           {profit_factor:.2f}")
+    print(f"Total Taxes/Fees:        ₹{total_taxes:.2f}")
     print("---")
     print(f"Annualized Sharpe Ratio: {sharpe_ratio:.2f}")
     print(f"Max Drawdown:            {max_drawdown:.2%}")

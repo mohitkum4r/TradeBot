@@ -76,11 +76,24 @@ class Config:
     RSI_DIVERGENCE_WINDOW = int(os.getenv("RSI_DIVERGENCE_WINDOW", 14))
     MA_SHORT_WINDOW = int(os.getenv("MA_SHORT_WINDOW", 10))  # Shorter for more signals
     MA_LONG_WINDOW = int(os.getenv("MA_LONG_WINDOW", 30))   # Shorter for more signals
+    ENTRY_Z = float(os.getenv("ENTRY_Z", 1.5))  # Lower for more arbitrage trades
+    VOLUME_MULTIPLIER = float(os.getenv("VOLUME_MULTIPLIER", 1.2))  # For signal confirmation
 
     # New: Backtest Parameters (to avoid invalid interval/rate limits)
-    BACKTEST_DAYS = int(os.getenv("BACKTEST_DAYS", 300))  # Increased default
-    BACKTEST_INTERVAL_MINUTES = int(os.getenv("BACKTEST_INTERVAL_MINUTES", 500))  # Finer interval
+    BACKTEST_DAYS = int(os.getenv("BACKTEST_DAYS", 730))  # Increased to 2 years for more data
+    BACKTEST_INTERVAL_MINUTES = int(os.getenv("BACKTEST_INTERVAL_MINUTES", 60))  # Finer interval
     FETCH_DELAY_SECONDS = float(os.getenv("FETCH_DELAY_SECONDS", 2.0))  # Delay between sequential fetches
+
+    # New: API Interval Adjustment Mapping (accurate from Groww docs)
+    INTERVAL_ADJUST_MAP = {
+        1: 7,      # 1 min: 7 days
+        5: 15,     # 5 min: 15 days
+        10: 30,    # 10 min: 30 days
+        60: 150,   # 1 hour: 150 days
+        240: 365,  # 4 hours: 365 days
+        1440: 1080, # 1 day: 1080 days (~3 years)
+        10080: float('inf')  # 1 week: no limit (full history)
+    }
 
     # New: Multi-Stock Trading Toggle
     MULTI_STOCK_TRADING_ENABLED = os.getenv("MULTI_STOCK_TRADING_ENABLED", True)  # Enable multi-stock signals

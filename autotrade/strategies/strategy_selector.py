@@ -106,13 +106,17 @@ class StrategySelector(BaseStrategy):
             signals = []
             target_stocks = Config.STOCKS if Config.MULTI_STOCK_TRADING_ENABLED else [Config.STOCKS[0]] if Config.STOCKS else ["RELIANCE"]
             for stock in target_stocks:
-                # Extract data for the stock from full_data
+                # Check if stock data exists in full_data
                 if isinstance(full_data.columns, pd.MultiIndex):
+                    if stock not in full_data.columns.levels[0]:
+                        print(f"Skipping {stock}: Data not available in full_data.")
+                        continue
                     stock_data = full_data[stock]
                 else:
                     stock_data = full_data  # Fallback if not multi-index
                 if len(stock_data) < max(Config.MA_SHORT_WINDOW, Config.MA_LONG_WINDOW) + 1:
-                    continue  # Skip if insufficient data for this stock
+                    print(f"Skipping {stock}: Insufficient data (need at least {max(Config.MA_SHORT_WINDOW, Config.MA_LONG_WINDOW) + 1} points).")
+                    continue
                 signal, reason = self.moderate_trend_strategy.generate_signal(stock_data)
                 if signal != "HOLD":
                     signals.append((stock, signal, reason))
