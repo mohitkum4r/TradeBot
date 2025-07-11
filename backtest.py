@@ -1,6 +1,8 @@
 # backtest.py
 import pandas as pd
 import numpy as np
+import ta
+
 from autotrade.strategies.base_strategy import BaseStrategy
 from autotrade.services.data_handler import DataHandler
 from autotrade.config import Config
