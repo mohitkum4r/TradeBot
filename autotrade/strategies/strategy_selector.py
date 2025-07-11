@@ -103,10 +103,16 @@ class StrategySelector(BaseStrategy):
             print(
                 f"--- Market Regime: MODERATE TREND (ADX: {last_adx:.2f}) -> Using Dual MA Crossover ---"
             )
-            # This strategy generates a signal for the benchmark index itself
-            signal, reason = self.moderate_trend_strategy.generate_signal(data)
+            # Apply to a dynamic stock (e.g., first in STOCKS) instead of hardcoded NIFTYBEES
+            target_stock = Config.STOCKS[0] if Config.STOCKS else "RELIANCE"  # Default to first stock or fallback
+            # Extract data for the target stock from full_data
+            if isinstance(full_data.columns, pd.MultiIndex):
+                stock_data = full_data[target_stock]
+            else:
+                stock_data = full_data  # Fallback if not multi-index
+            signal, reason = self.moderate_trend_strategy.generate_signal(stock_data)
             print(f"Generated signal: {signal} | Reason: {reason}")
-            return "NIFTYBEES", signal, reason  # Example: trade Nifty ETF
+            return target_stock, signal, reason
 
         elif high_vol:
             print(
