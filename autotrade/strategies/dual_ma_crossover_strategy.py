@@ -27,12 +27,12 @@ class DualMaCrossoverStrategy(BaseStrategy):
         # Make a copy to avoid SettingWithCopyWarning
         data = data.copy()
 
-        # Calculate short and long term Exponential Moving Averages (EMAs)
+        # Calculate short and long term Exponential Moving Averages (EMAs) using .loc
         # EMAs give more weight to recent prices, making them more responsive. [cite: 1296]
-        data["short_ma"] = ta.trend.ema_indicator(
+        data.loc[:, "short_ma"] = ta.trend.ema_indicator(
             data["close"], window=self.short_window
         )
-        data["long_ma"] = ta.trend.ema_indicator(data["close"], window=self.long_window)
+        data.loc[:, "long_ma"] = ta.trend.ema_indicator(data["close"], window=self.long_window)
 
         last = data.iloc[-1]
         prev = data.iloc[-2]

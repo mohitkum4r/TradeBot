@@ -39,7 +39,7 @@ class StatisticalArbitrageStrategy(BaseStrategy):
             if p_value < 0.05:
                 x = sm.add_constant(pair_data[stock2])
                 model = sm.OLS(pair_data[stock1], x).fit()
-                spread = pair_data[stock1] - model.params[1] * pair_data[stock2]
+                spread = pair_data[stock1] - model.params.iloc[1] * pair_data[stock2]  # Fixed to use .iloc[1]
                 z_score = (
                     (spread.iloc[-1] - spread.mean()) / spread.std()
                 )
