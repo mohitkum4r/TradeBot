@@ -5,6 +5,8 @@ from growwapi import GrowwAPI
 from growwapi.groww.exceptions import GrowwAPIException
 from tenacity import retry, stop_after_attempt, wait_exponential
 import time
+import os
+import pickle
 from typing import Dict, Union
 from ..config import Config
 
@@ -15,6 +17,22 @@ class DataHandler:
             raise ValueError("GrowwAPI client is required for all data fetching operations.")
         self.client = client
         self.cache: Dict[str, pd.DataFrame] = {}  # In-memory cache
+        self.cache_dir = 'cache/'  # Local storage directory
+        os.makedirs(self.cache_dir, exist_ok=True)
+
+    def _load_from_local_cache(self, cache_key: str) -> pd.DataFrame | None:
+        cache_path = os.path.join(self.cache_dir, f"{cache_key}.pkl")
+        if os.path.exists(cache_path):
+            with open(cache_path, 'rb') as f:
+                print(f"Loaded from local cache: {cache_key}")
+                return pickle.load(f)
+        return None
+
+    def _save_to_local_cache(self, cache_key: str, df: pd.DataFrame):
+        cache_path = os.path.join(self.cache_dir, f"{cache_key}.pkl")
+        with open(cache_path, 'wb') as f:
+            pickle.dump(df, f)
+        print(f"Saved to local cache: {cache_key}")
 
     def _fetch_single(self, stock: str, days: int, interval_minutes: int) -> pd.DataFrame:
         print(f"Fetching historical data for {stock} via Groww API (days={days}, interval={interval_minutes})...")
@@ -67,10 +85,15 @@ class DataHandler:
 
         if isinstance(stock, str):
             cache_key = f"{stock}_{days}_{adjusted_interval}"
+            # Check local cache first
+            df = self._load_from_local_cache(cache_key)
+            if df is not None:
+                return df
             if cache_key in self.cache:
                 return self.cache[cache_key]
             df = self._fetch_single(stock, days, adjusted_interval)
             self.cache[cache_key] = df
+            self._save_to_local_cache(cache_key, df)  # Save to local
             return df
         else:
             # Sequential fetch with delay and progress logging
@@ -79,12 +102,18 @@ class DataHandler:
             for idx, s in enumerate(stock, 1):
                 print(f"Fetching {idx}/{total_stocks}: {s}")
                 cache_key = f"{s}_{days}_{adjusted_interval}"
+                # Check local cache first
+                df = self._load_from_local_cache(cache_key)
+                if df is not None:
+                    results[s] = df
+                    continue
                 if cache_key in self.cache:
                     results[s] = self.cache[cache_key]
                     continue
                 try:
                     df = self._fetch_single(s, days, adjusted_interval)
                     self.cache[cache_key] = df
+                    self._save_to_local_cache(cache_key, df)  # Save to local
                     results[s] = df
                 except Exception as e:
                     print(f"Skipping {s} due to persistent error: {e}")

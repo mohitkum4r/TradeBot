@@ -1,6 +1,11 @@
 # backtest.py
+from datetime import datetime
+
 import pandas as pd
 import numpy as np
+import json
+import csv
+
 import ta
 
 from autotrade.strategies.base_strategy import BaseStrategy
@@ -16,17 +21,15 @@ def run_backtest(strategy: BaseStrategy, data_handler: DataHandler):
     print(f"\n--- Starting backtest for strategy: {strategy.__class__.__name__} ---")
 
     # Backtest on entire universe with configurable params to avoid API limits
-    stock_universe = [s for s in Config.STOCKS]  # Copy to modify
+    stock_universe = Config.STOCKS
     historical_data = data_handler.get_historical_data(
         stock_universe,
         days=Config.BACKTEST_DAYS,
         interval_minutes=Config.BACKTEST_INTERVAL_MINUTES
     )
 
-    # Update universe to only include successfully fetched stocks
-    stock_universe = list(historical_data.keys())
-    if not stock_universe:
-        print("Cannot run backtest, no historical data fetched for any stock.")
+    if not historical_data:
+        print("Cannot run backtest, no historical data fetched.")
         return
 
     # Fetch Nifty data separately for regime analysis (use correct Groww symbol for Nifty 50)
@@ -46,8 +49,9 @@ def run_backtest(strategy: BaseStrategy, data_handler: DataHandler):
     trailing_stop_pct = Config.STOP_LOSS_PCT
     take_profit_pct = Config.TAKE_PROFIT_PCT
     trades = []  # List to track trades for metrics (e.g., [{'stock': 'ABC', 'entry_price': 100, 'exit_price': 110, 'pnl': 10, 'type': 'win'}])
+    logs = []  # Structured logs for LLM evaluation
 
-    print(f"Backtesting on {len(stock_universe)} stocks (fetched successfully)...")
+    print(f"Backtesting on {len(stock_universe)} stocks...")
 
     # Assume combined DataFrame for simplicity (handle missing stocks gracefully)
     combined_df = pd.concat({s: df for s, df in historical_data.items() if not df.empty}, axis=1)
@@ -68,6 +72,8 @@ def run_backtest(strategy: BaseStrategy, data_handler: DataHandler):
             full_stock_data=current_slice
         )
         print(f"Signals at step {i}: {signals}")  # Debug logging for signals
+
+        step_log = {'step': i, 'regime': 'Unknown', 'signals': signals, 'positions': positions.copy(), 'cash': cash}  # Log for LLM
 
         # Handle list of signals
         if isinstance(signals, list):
@@ -104,6 +110,7 @@ def run_backtest(strategy: BaseStrategy, data_handler: DataHandler):
                             peak_prices[stock] = current_price  # Init peak for trailing
                             print(f"BUY {quantity} {stock} @ {current_price:.2f} | Reason: {reason}")
                             trades.append({'stock': stock, 'entry_price': current_price, 'quantity': quantity, 'entry_step': i, 'taxes': taxes})
+                            print("Cha-ching! Position opened—let's make some money! 💰")  # Motivational log
 
                 elif signal == "SELL" and positions[stock] > 0:
                     revenue = current_price * positions[stock] * 0.999  # Slippage
@@ -116,6 +123,10 @@ def run_backtest(strategy: BaseStrategy, data_handler: DataHandler):
                     trade_type = 'win' if pnl > 0 else 'loss'
                     trades.append({'stock': stock, 'exit_price': current_price, 'pnl': pnl, 'type': trade_type, 'exit_step': i, 'taxes': taxes})
                     positions[stock] = 0
+                    if pnl > 0:
+                        print(f"Cha-ching! Profit of ₹{pnl:.2f} banked—money in the pocket! 💸")
+                    else:
+                        print(f"Oops, loss of ₹{pnl:.2f}—let's learn and get back stronger! 📈")
 
         # Handle single tuple signals (e.g., from pairs)
         elif isinstance(signals, tuple):
@@ -142,6 +153,8 @@ def run_backtest(strategy: BaseStrategy, data_handler: DataHandler):
                         cash += net
                         print(f"BUY_SPREAD: Long {qty1} {stock1} @ {price1:.2f}, Short {qty2} {stock2} @ {price2:.2f} | Net: {net:.2f} | Reason: {reason}")
                         trades.append({'stock': f"{stock1}-{stock2}", 'entry_price': (price1, price2), 'quantity': (qty1, qty2), 'entry_step': i, 'taxes': taxes})
+                        if net > 0:
+                            print(f"Cha-ching! Spread profit of ₹{net:.2f}—arbitrage magic! 💰")
                     elif signal == "SELL_SPREAD":
                         # Short stock1, Long stock2
                         revenue = price1 * qty1 * 0.999  # Simulated short sell
@@ -151,6 +164,8 @@ def run_backtest(strategy: BaseStrategy, data_handler: DataHandler):
                         cash += net
                         print(f"SELL_SPREAD: Short {qty1} {stock1} @ {price1:.2f}, Long {qty2} {stock2} @ {price2:.2f} | Net: {net:.2f} | Reason: {reason}")
                         trades.append({'stock': f"{stock1}-{stock2}", 'entry_price': (price1, price2), 'quantity': (qty1, qty2), 'entry_step': i, 'taxes': taxes})
+                        if net > 0:
+                            print(f"Cha-ching! Spread profit of ₹{net:.2f}—arbitrage magic! 💰")
                     elif signal == "EXIT_SPREAD":
                         # Simulate closing spread (assume flat for simplicity)
                         print(f"EXIT_SPREAD: Closing {instrument} | Reason: {reason}")
@@ -185,6 +200,7 @@ def run_backtest(strategy: BaseStrategy, data_handler: DataHandler):
                             peak_prices[stock] = current_price  # Init peak for trailing
                             print(f"BUY {quantity} {stock} @ {current_price:.2f} | Reason: {reason}")
                             trades.append({'stock': stock, 'entry_price': current_price, 'quantity': quantity, 'entry_step': i, 'taxes': taxes})
+                            print("Cha-ching! Position opened—let's make some money! 💰")
 
                 elif signal == "SELL" and positions[stock] > 0:
                     revenue = current_price * positions[stock] * 0.999  # Slippage
@@ -197,6 +213,10 @@ def run_backtest(strategy: BaseStrategy, data_handler: DataHandler):
                     trade_type = 'win' if pnl > 0 else 'loss'
                     trades.append({'stock': stock, 'exit_price': current_price, 'pnl': pnl, 'type': trade_type, 'exit_step': i, 'taxes': taxes})
                     positions[stock] = 0
+                    if pnl > 0:
+                        print(f"Cha-ching! Profit of ₹{pnl:.2f} banked—money in the pocket! 💸")
+                    else:
+                        print(f"Oops, loss of ₹{pnl:.2f}—let's learn and get back stronger! 📈")
 
         # Apply trailing stop and take-profit for open positions
         for stock in list(positions.keys()):
@@ -218,6 +238,8 @@ def run_backtest(strategy: BaseStrategy, data_handler: DataHandler):
                     trade_type = 'win' if pnl > 0 else 'loss'
                     trades.append({'stock': stock, 'exit_price': current_price, 'pnl': pnl, 'type': trade_type, 'exit_step': i, 'taxes': taxes})
                     positions[stock] = 0
+                    if pnl > 0:
+                        print(f"Cha-ching! Profit of ₹{pnl:.2f} from trailing stop! 💰")
                 # Take-profit
                 elif current_price > buy_prices[stock] * (1 + take_profit_pct):
                     revenue = current_price * positions[stock] * 0.999
@@ -230,6 +252,7 @@ def run_backtest(strategy: BaseStrategy, data_handler: DataHandler):
                     trade_type = 'win' if pnl > 0 else 'loss'
                     trades.append({'stock': stock, 'exit_price': current_price, 'pnl': pnl, 'type': trade_type, 'exit_step': i, 'taxes': taxes})
                     positions[stock] = 0
+                    print(f"Cha-ching! Locked in profit of ₹{pnl:.2f}—smart trading pays off! 📈")
 
         # Update portfolio value (with compounding - cash is reinvested)
         portfolio_value = cash + sum(
@@ -274,6 +297,41 @@ def run_backtest(strategy: BaseStrategy, data_handler: DataHandler):
         expectancy = 0
         profit_factor = 0
         total_taxes = 0
+
+    # Structured log for LLM evaluation
+    performance_log = {
+        'timestamp': datetime.now().isoformat(),
+        'strategy': strategy.__class__.__name__,
+        'initial_capital': initial_capital,
+        'final_value': final_portfolio_value,
+        'total_pnl': total_pnl,
+        'pnl_percent': total_pnl_percent,
+        'num_trades': num_trades,
+        'win_rate': win_rate,
+        'avg_pnl': avg_pnl,
+        'avg_win': avg_win,
+        'avg_loss': avg_loss,
+        'expectancy': expectancy,
+        'profit_factor': profit_factor,
+        'total_taxes': total_taxes,
+        'sharpe_ratio': sharpe_ratio,
+        'max_drawdown': max_drawdown,
+        'calmar_ratio': calmar_ratio,
+        'trades': trades  # Full trade details for analysis
+    }
+
+    # Save to JSON for LLM/analysis
+    with open('backtest_logs.json', 'a') as f:  # Append for multiple runs
+        json.dump(performance_log, f)
+        f.write('\n')  # Newline for separation
+    print("Backtest log saved to backtest_logs.json for LLM evaluation and optimization.")
+
+    # Save to CSV for easy viewing
+    with open('backtest_results.csv', 'w', newline='') as csvfile:
+        writer = csv.DictWriter(csvfile, fieldnames=performance_log.keys())
+        writer.writeheader()
+        writer.writerow(performance_log)
+    print("Backtest results saved to backtest_results.csv.")
 
     print("\n--- Backtest Results ---")
     print(f"Initial Capital:       ₹{initial_capital:,.2f}")

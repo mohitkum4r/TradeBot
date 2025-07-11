@@ -80,7 +80,7 @@ class Config:
     VOLUME_MULTIPLIER = float(os.getenv("VOLUME_MULTIPLIER", 1.2))  # For signal confirmation
 
     # New: Backtest Parameters (to avoid invalid interval/rate limits)
-    BACKTEST_DAYS = int(os.getenv("BACKTEST_DAYS", 730))  # Increased to 2 years for more data
+    BACKTEST_DAYS = int(os.getenv("BACKTEST_DAYS", 150))  # Increased to 2 years for more data
     BACKTEST_INTERVAL_MINUTES = int(os.getenv("BACKTEST_INTERVAL_MINUTES", 60))  # Finer interval
     FETCH_DELAY_SECONDS = float(os.getenv("FETCH_DELAY_SECONDS", 2.0))  # Delay between sequential fetches
 
