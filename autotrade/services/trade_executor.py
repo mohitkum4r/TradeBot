@@ -1,3 +1,4 @@
+# autotrade/services/trade_executor.py
 from abc import ABC, abstractmethod
 from sqlalchemy.orm import Session
 from ..config import Config
@@ -10,14 +11,26 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 
 
 class BaseTradeExecutor(ABC):
-    def __init__(self, db: Session, data_handler: DataHandler, client: GrowwAPI):
+    def __init__(
+        self, db: Session, data_handler: DataHandler, client: GrowwAPI | None = None
+    ):
         self.db = db
         self.data_handler = data_handler
         self.client = client
 
     @abstractmethod
-    def execute_trade(self, stock: str, signal: str, quantity: int, reason: str):
+    def execute_trade(
+        self, stock: str, signal: str, quantity: int, reason: str, capital: float
+    ):
         pass
+
+    def _apply_risk_management(
+        self, price: float, quantity: int, capital: float
+    ) -> int:
+        risk_amount = capital * Config.RISK_PER_TRADE
+        stop_loss_price = price * (1 - Config.STOP_LOSS_PCT)
+        position_size = int(risk_amount / (price - stop_loss_price))
+        return min(quantity, position_size)  # Cap at calculated size
 
     def _log_and_update_portfolio(
         self,
@@ -57,7 +70,7 @@ class BaseTradeExecutor(ABC):
             if item:
                 new_cost = (item.average_price * item.quantity) + (price * qty)
                 new_qty = item.quantity + qty
-                item.average_price = new_cost / new_qty
+                item.average_price = new_cost / new_qty if new_qty > 0 else 0
                 item.quantity = new_qty
             else:
                 self.db.add(
@@ -79,7 +92,9 @@ class LiveTradeExecutor(BaseTradeExecutor):
     @retry(
         stop=stop_after_attempt(2), wait=wait_exponential(multiplier=1, min=2, max=10)
     )
-    def execute_trade(self, stock: str, signal: str, quantity: int, reason: str):
+    def execute_trade(
+        self, stock: str, signal: str, quantity: int, reason: str, capital: float
+    ):
         if quantity <= 0:
             print(f"Skipping trade for {stock}: Invalid quantity ({quantity}).")
             return
@@ -89,10 +104,15 @@ class LiveTradeExecutor(BaseTradeExecutor):
             print(f"Could not execute trade for {stock}, failed to get LTP.")
             return
 
+        quantity = self._apply_risk_management(ltp, quantity, capital)
+
         if signal == "BUY":
             self._execute_buy(stock, quantity, ltp, reason)
         elif signal == "SELL":
             self._execute_sell(stock, quantity, ltp, reason)
+
+        # Check for SL/TP (simplified; in production, use order monitoring)
+        # Note: Groww API may require separate orders for SL/TP
 
     def _execute_buy(self, stock, quantity, price, reason):
         total_cost = price * quantity
@@ -170,7 +190,9 @@ class LiveTradeExecutor(BaseTradeExecutor):
 
 
 class PaperTradeExecutor(BaseTradeExecutor):
-    def execute_trade(self, stock: str, signal: str, quantity: int, reason: str):
+    def execute_trade(
+        self, stock: str, signal: str, quantity: int, reason: str, capital: float
+    ):
         if quantity <= 0:
             print(f"Skipping trade for {stock}: Invalid quantity ({quantity}).")
             return
@@ -179,6 +201,8 @@ class PaperTradeExecutor(BaseTradeExecutor):
         if not ltp:
             print(f"Could not execute paper trade for {stock}, failed to get LTP.")
             return
+
+        quantity = self._apply_risk_management(ltp, quantity, capital)
 
         if signal == "BUY":
             print(f"EXECUTING PAPER BUY: {quantity} of {stock} @ ₹{ltp:.2f}")

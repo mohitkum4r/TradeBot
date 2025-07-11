@@ -1,22 +1,23 @@
+# autotrade/services/data_handler.py
 import pandas as pd
 from datetime import datetime, timedelta
 from growwapi import GrowwAPI
 from growwapi.groww.exceptions import GrowwAPIException
-from tenacity import retry, stop_after_attempt, wait_exponential, RetryError
+from tenacity import retry, stop_after_attempt, wait_exponential
+import time
+from typing import Dict, Union
+from ..config import Config
 
 
 class DataHandler:
-    def __init__(self, client: GrowwAPI):
+    def __init__(self, client: GrowwAPI | None = None):
+        if client is None:
+            raise ValueError("GrowwAPI client is required for all data fetching operations.")
         self.client = client
+        self.cache: Dict[str, pd.DataFrame] = {}  # In-memory cache
 
-    @retry(
-        stop=stop_after_attempt(4),  # Increased attempts
-        wait=wait_exponential(multiplier=1.5, min=3, max=15) # Increased wait with jitter
-    )
-    def get_historical_data(
-        self, stock: str, days: int = 90, interval_minutes: int = 60
-    ) -> pd.DataFrame:
-        print(f"Fetching historical data for {stock}...")
+    def _fetch_single(self, stock: str, days: int, interval_minutes: int) -> pd.DataFrame:
+        print(f"Fetching historical data for {stock} via Groww API...")
         try:
             end_time = datetime.now()
             start_time = end_time - timedelta(days=days)
@@ -44,26 +45,47 @@ class DataHandler:
             return df
 
         except GrowwAPIException as e:
-            print(f"API Error fetching historical data for {stock}: {e}")
-            raise  # Re-raise for retry logic
-        except Exception as e:
-            print(f"An unexpected error occurred fetching historical data for {stock}: {e}")
-            return pd.DataFrame() # Return empty df on non-retryable error
+            print(f"Error fetching historical data for {stock}: {e}")
+            raise
 
-    @retry(
-        stop=stop_after_attempt(4),
-        wait=wait_exponential(multiplier=1, min=2, max=10)
-    )
+    @retry(stop=stop_after_attempt(5), wait=wait_exponential(multiplier=2, min=4, max=60))  # Longer backoff for rate limits
+    def get_historical_data(
+        self, stock: Union[str, list[str]], days: int = 90, interval_minutes: int = 60
+    ) -> Union[pd.DataFrame, Dict[str, pd.DataFrame]]:
+        if isinstance(stock, str):
+            cache_key = f"{stock}_{days}_{interval_minutes}"
+            if cache_key in self.cache:
+                return self.cache[cache_key]
+            df = self._fetch_single(stock, days, interval_minutes)
+            self.cache[cache_key] = df
+            return df
+        else:
+            # Sequential fetch with delay to avoid rate limits
+            results = {}
+            for s in stock:
+                cache_key = f"{s}_{days}_{interval_minutes}"
+                if cache_key in self.cache:
+                    results[s] = self.cache[cache_key]
+                    continue
+                try:
+                    df = self._fetch_single(s, days, interval_minutes)
+                    self.cache[cache_key] = df
+                    results[s] = df
+                except Exception as e:
+                    print(f"Skipping {s} due to persistent error: {e}")
+                time.sleep(Config.FETCH_DELAY_SECONDS)  # Delay to respect rate limits
+            return {s: df for s, df in results.items() if not df.empty}
+
+    @retry(stop=stop_after_attempt(5), wait=wait_exponential(multiplier=2, min=4, max=60))
     def get_ltp(self, stock: str) -> float | None:
         print(f"Fetching LTP for {stock}...")
         try:
-            # Assuming the API requires NSE prefix for cash segment
-            symbol_to_fetch = f"NSE_{stock.upper()}"
+            symbol = f"NSE_{stock}"
             response = self.client.get_ltp(
-                segment=self.client.SEGMENT_CASH, exchange_trading_symbols=(symbol_to_fetch,)
+                segment=self.client.SEGMENT_CASH, exchange_trading_symbols=(symbol,)
             )
 
-            ltp = response.get(symbol_to_fetch)
+            ltp = response.get(symbol)
             if ltp:
                 print(f"LTP for {stock}: {ltp}")
                 return float(ltp)
@@ -72,8 +94,5 @@ class DataHandler:
                 return None
 
         except GrowwAPIException as e:
-            print(f"API Error fetching LTP for {stock}: {e}")
-            raise  # Re-raise for retry
-        except Exception as e:
-            print(f"An unexpected error occurred fetching LTP for {stock}: {e}")
-            return None
+            print(f"Error fetching LTP for {stock}: {e}")
+            raise

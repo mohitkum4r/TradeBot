@@ -37,8 +37,9 @@ class DynamicPairsStrategy(BaseStrategy):
                 y = pair_data[stock1]
                 model = sm.OLS(y, x).fit()
                 spread = y - model.params[1] * pair_data[stock2]
-                z_score = (spread.iloc[-1] - spread.rolling(window=self.window).mean().iloc[-1]) / \
-                          spread.rolling(window=self.window).std().iloc[-1]
+                z_score = (
+                    spread.iloc[-1] - spread.rolling(window=self.window).mean().iloc[-1]
+                ) / spread.rolling(window=self.window).std().iloc[-1]
 
                 if abs(z_score) > abs(highest_z):
                     highest_z = z_score
@@ -60,9 +61,21 @@ class DynamicPairsStrategy(BaseStrategy):
 
         # Generate signal for the best pair found
         if z_score > self.entry_z:
-            return "SELL_SPREAD", f"{stock1},{stock2}", f"Z-score ({z_score:.2f}) > {self.entry_z}"
+            return (
+                "SELL_SPREAD",
+                f"{stock1},{stock2}",
+                f"Z-score ({z_score:.2f}) > {self.entry_z}",
+            )
 
         if z_score < -self.entry_z:
-            return "BUY_SPREAD", f"{stock1},{stock2}", f"Z-score ({z_score:.2f}) < -{self.entry_z}"
+            return (
+                "BUY_SPREAD",
+                f"{stock1},{stock2}",
+                f"Z-score ({z_score:.2f}) < -{self.entry_z}",
+            )
 
-        return "HOLD", "", f"Best pair ({stock1},{stock2}) Z-score ({z_score:.2f}) is within threshold."
+        return (
+            "HOLD",
+            "",
+            f"Best pair ({stock1},{stock2}) Z-score ({z_score:.2f}) is within threshold.",
+        )

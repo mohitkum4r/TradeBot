@@ -9,7 +9,9 @@ class AdvancedMomentumStrategy(BaseStrategy):
     Source: Algorithmic Trading NSE Strategies_.docx [cite: 171]
     """
 
-    def __init__(self, stock_universe: list[str], lookback_period=126, top_percentile=0.1):
+    def __init__(
+        self, stock_universe: list[str], lookback_period=126, top_percentile=0.1
+    ):
         """
         Args:
             stock_universe (list[str]): The list of all stocks to consider.
@@ -20,7 +22,9 @@ class AdvancedMomentumStrategy(BaseStrategy):
         self.lookback_period = lookback_period
         self.top_n = int(len(stock_universe) * top_percentile)
 
-    def generate_signal(self, data: pd.DataFrame, current_portfolio: list[str]) -> list[tuple[str, str, str]]:
+    def generate_signal(
+        self, data: pd.DataFrame, current_portfolio: list[str]
+    ) -> list[tuple[str, str, str]]:
         """
         Analyzes the entire universe and returns a list of trades to rebalance the portfolio.
 
@@ -38,17 +42,22 @@ class AdvancedMomentumStrategy(BaseStrategy):
                 stock_data = data[stock]
                 if len(stock_data) >= self.lookback_period:
                     # Calculate the return over the lookback period
-                    momentum = (stock_data['close'].iloc[-1] / stock_data['close'].iloc[-self.lookback_period]) - 1
+                    momentum = (
+                        stock_data["close"].iloc[-1]
+                        / stock_data["close"].iloc[-self.lookback_period]
+                    ) - 1
                     momentum_scores[stock] = momentum
 
         if not momentum_scores:
             return []
 
         # Rank stocks by momentum
-        ranked_stocks = sorted(momentum_scores.items(), key=lambda item: item[1], reverse=True)
+        ranked_stocks = sorted(
+            momentum_scores.items(), key=lambda item: item[1], reverse=True
+        )
 
         # Identify the new "winner" portfolio
-        winner_portfolio = [stock for stock, score in ranked_stocks[:self.top_n]]
+        winner_portfolio = [stock for stock, score in ranked_stocks[: self.top_n]]
 
         trades = []
         # Generate SELL signals for stocks that are no longer winners

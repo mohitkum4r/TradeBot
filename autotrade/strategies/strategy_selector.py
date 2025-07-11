@@ -1,3 +1,4 @@
+# autotrade/strategies/strategy_selector.py
 import pandas as pd
 import ta
 from ..config import Config
@@ -6,8 +7,9 @@ from .dual_ma_crossover_strategy import DualMaCrossoverStrategy
 from .mean_reversion_strategy import MeanReversionStrategy
 from .advanced_momentum_strategy import AdvancedMomentumStrategy
 from .dynamic_pairs_strategy import DynamicPairsStrategy
-from .volatility_breakout_strategy import VolatilityBreakoutStrategy
-from .rsi_divergence_strategy import RsiDivergenceStrategy
+from .volatility_breakout_strategy import VolatilityBreakoutStrategy  # New
+from .rsi_divergence_strategy import RSIDivergenceStrategy  # New
+from .statistical_arbitrage_strategy import StatisticalArbitrageStrategy  # New
 
 
 class StrategySelector(BaseStrategy):
@@ -18,44 +20,42 @@ class StrategySelector(BaseStrategy):
 
     def __init__(
         self,
-        adx_period=14,
-        trend_threshold=25,
-        strong_trend_threshold=40,
-        bb_window=20,
-        volatility_threshold=0.04, # Example: 4% BB Width
+        adx_period=Config.ADX_PERIOD,
+        trend_threshold=Config.TREND_THRESHOLD,
+        strong_trend_threshold=Config.STRONG_TREND_THRESHOLD,
     ):
         self.adx_period = adx_period
         self.trend_threshold = trend_threshold
         self.strong_trend_threshold = strong_trend_threshold
-        self.bb_window = bb_window
-        self.volatility_threshold = volatility_threshold
 
         # Initialize all potential strategies
         self.strong_trend_strategy: BaseStrategy = AdvancedMomentumStrategy(
             stock_universe=Config.STOCKS
         )
         self.moderate_trend_strategy: BaseStrategy = DualMaCrossoverStrategy()
-        self.ranging_strategy: BaseStrategy = MeanReversionStrategy()
         self.pairs_trading_strategy: BaseStrategy = DynamicPairsStrategy(
             pairs_list=Config.PAIRS_LIST
         )
-        self.volatility_breakout_strategy: BaseStrategy = VolatilityBreakoutStrategy()
-        self.reversal_strategy: BaseStrategy = RsiDivergenceStrategy()
-
+        self.ranging_strategy: BaseStrategy = MeanReversionStrategy()
+        self.vol_breakout_strategy: BaseStrategy = VolatilityBreakoutStrategy()  # New
+        self.rsi_divergence_strategy: BaseStrategy = RSIDivergenceStrategy()  # New
+        self.arbitrage_strategy: BaseStrategy = StatisticalArbitrageStrategy(
+            pairs_list=Config.PAIRS_LIST
+        )  # New
 
     def generate_signal(
         self, data: pd.DataFrame, **kwargs
     ) -> tuple[str, str, str] | list[tuple[str, str, str]]:
         """
-        Dynamically selects and executes the best strategy based on market regime.
+        Dynamically selects and executes the best strategy.
 
         Args:
-            data (pd.DataFrame): DataFrame for the primary instrument (e.g., Nifty 50)
-                                 to determine the overall market regime.
+            data (pd.DataFrame): DataFrame containing data for the primary instrument
+                                 (e.g., Nifty 50) to determine the overall market regime.
             **kwargs: Can include 'full_stock_data' and 'current_portfolio'.
         """
         # --- Regime Analysis ---
-        # 1. Trend Strength Analysis using ADX
+        # Use ADX on a market index (like Nifty 50) to determine trend strength
         adx_indicator = ta.trend.ADXIndicator(
             high=data["high"],
             low=data["low"],
@@ -64,53 +64,60 @@ class StrategySelector(BaseStrategy):
         )
         last_adx = adx_indicator.adx().iloc[-1]
 
-        # 2. Volatility Analysis using Bollinger Band Width
-        bb = ta.volatility.BollingerBands(close=data["close"], window=self.bb_window)
-        bb_width = ((bb.bollinger_hband() - bb.bollinger_lband()) / bb.bollinger_mavg()).iloc[-1]
-
+        # Calculate ATR for volatility regime
+        atr = (
+            ta.volatility.AverageTrueRange(
+                high=data["high"], low=data["low"], close=data["close"]
+            )
+            .average_true_range()
+            .iloc[-1]
+        )
+        high_vol = (
+            atr > data["close"].iloc[-1] * 0.02
+        )  # Arbitrary threshold for high vol
 
         # --- Dynamic Strategy Selection ---
-        print(f"--- Market Regime Analysis: ADX={last_adx:.2f}, BB-Width={bb_width:.3f} ---")
+        full_data = kwargs.get("full_stock_data", data)
+        current_portfolio = kwargs.get("current_portfolio", [])
 
-        # High Volatility -> Volatility Breakout
-        if bb_width > self.volatility_threshold:
-            print("Regime: HIGH VOLATILITY -> Using Volatility Breakout Strategy")
-            # This strategy generates a signal for the benchmark index ETF
-            signal, reason = self.volatility_breakout_strategy.generate_signal(data)
-            return "NIFTYBEES", signal, reason
-
-        # Strong Trend -> Advanced Momentum
-        elif last_adx > self.strong_trend_threshold:
-            print(f"Regime: STRONG TREND -> Using Advanced Momentum Portfolio")
-            full_data = kwargs.get("full_stock_data", data)
-            current_portfolio = kwargs.get("current_portfolio", [])
+        if last_adx > self.strong_trend_threshold:
+            print(
+                f"--- Market Regime: STRONG TREND (ADX: {last_adx:.2f}) -> Using Advanced Momentum Portfolio ---"
+            )
             return self.strong_trend_strategy.generate_signal(
                 full_data, current_portfolio=current_portfolio
             )
 
-        # Moderate Trend -> Dual MA Crossover
         elif last_adx > self.trend_threshold:
-            print(f"Regime: MODERATE TREND -> Using Dual MA Crossover Strategy")
-            # This strategy generates a signal for the benchmark index ETF
+            print(
+                f"--- Market Regime: MODERATE TREND (ADX: {last_adx:.2f}) -> Using Dual MA Crossover ---"
+            )
+            # This strategy generates a signal for the benchmark index itself
             signal, reason = self.moderate_trend_strategy.generate_signal(data)
-            return "NIFTYBEES", signal, reason
+            return "NIFTYBEES", signal, reason  # Example: trade Nifty ETF
 
-        # Low Trend / Ranging Market -> Mean Reversion & Pairs Trading
-        else: # ADX < trend_threshold
-            print(f"Regime: RANGE-BOUND / LOW TREND -> Evaluating Pairs & Reversal Strategies")
-            # Attempt to find a pairs trade first, as it's market-neutral
-            full_data = kwargs.get("full_stock_data", data)
-            pairs_signal, instrument, reason = self.pairs_trading_strategy.generate_signal(full_data)
-            if pairs_signal != "HOLD":
-                print("-> Found valid Pairs Trade opportunity.")
-                return instrument, pairs_signal, reason
+        elif high_vol:
+            print(
+                f"--- Market Regime: HIGH VOLATILITY (ATR: {atr:.2f}) -> Using Volatility Breakout or RSI Divergence ---"
+            )
+            # Choose between breakout and divergence based on sub-conditions
+            if data["volume"].iloc[-1] > data["volume"].rolling(20).mean().iloc[-1]:
+                return self.vol_breakout_strategy.generate_signal(full_data)
+            else:
+                return self.rsi_divergence_strategy.generate_signal(full_data)
 
-            # If no pairs trade, look for a classic mean reversion or divergence signal on the index
-            reversal_signal, reversal_reason = self.reversal_strategy.generate_signal(data)
-            if reversal_signal != "HOLD":
-                 print("-> Found RSI Divergence opportunity on Index.")
-                 return "NIFTYBEES", reversal_signal, reversal_reason
+        elif last_adx < self.trend_threshold:
+            print(
+                f"--- Market Regime: RANGE-BOUND / LOW TREND (ADX: {last_adx:.2f}) -> Using Mean Reversion or Arbitrage ---"
+            )
+            if len(current_portfolio) > 0:  # If holding positions, prefer reversion
+                signal, reason = self.ranging_strategy.generate_signal(data)
+                return current_portfolio[0], signal, reason  # Apply to first held stock
+            else:
+                return self.arbitrage_strategy.generate_signal(full_data)
 
-            print("-> Defaulting to Mean Reversion on Index.")
-            mean_rev_signal, mean_rev_reason = self.ranging_strategy.generate_signal(data)
-            return "NIFTYBEES", mean_rev_signal, mean_rev_reason
+        else:
+            print(
+                f"--- Market Regime: RANGE-BOUND / LOW TREND (ADX: {last_adx:.2f}) -> Using Dynamic Pairs Trading ---"
+            )
+            return self.pairs_trading_strategy.generate_signal(full_data)

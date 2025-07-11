@@ -1,3 +1,4 @@
+# main.py
 import schedule
 import time
 import pyotp
@@ -18,8 +19,6 @@ from autotrade.services.trade_executor import (
 from autotrade.services.sentiment_analyzer import SentimentAnalyzer
 from autotrade.strategies.base_strategy import BaseStrategy
 from autotrade.strategies.strategy_selector import StrategySelector
-from autotrade.strategies.dynamic_pairs_strategy import DynamicPairsStrategy
-from autotrade.strategies.advanced_momentum_strategy import AdvancedMomentumStrategy
 from backtest import run_backtest
 
 
@@ -32,7 +31,8 @@ def authenticate_groww() -> GrowwAPI | None:
     try:
         totp_gen = pyotp.TOTP(Config.API_SECRET)
         totp = totp_gen.now()
-        client = GrowwAPI(api_key=Config.API_KEY, totp=totp)
+        token = GrowwAPI.get_access_token(api_key=Config.API_KEY, totp=totp)
+        client = GrowwAPI(token=token)
         print("✅ Authentication Successful!")
         return client
     except GrowwAPIException as e:
@@ -101,12 +101,16 @@ def trading_cycle(
             print("No trading signals generated in this cycle.")
             return
 
+        # Get current capital for risk management
+        current_capital = Config.INITIAL_CAPITAL  # TODO: Query from DB for live updates
+
         # The selector might return a single tuple or a list of tuples
         if isinstance(trade_signals, list):
             # For portfolio rebalancing
             for stock, signal, reason in trade_signals:
-                # Simple logic: assume fixed quantity for now
-                executor.execute_trade(stock, signal, 10, reason)
+                # Dynamic quantity based on config and risk
+                max_qty = int((current_capital * Config.MAX_EXPOSURE_PER_TRADE) / data_handler.get_ltp(stock) or 1)
+                executor.execute_trade(stock, signal, max_qty, reason, current_capital)
         elif isinstance(trade_signals, tuple):
             # For single trades or pairs
             instrument, signal, reason = trade_signals
@@ -115,17 +119,19 @@ def trading_cycle(
             elif "SPREAD" in signal:
                 # Handle pairs trade
                 stock1, stock2 = instrument.split(',')
-                if signal == "BUY_SPREAD": # Long stock1, Short stock2
+                max_qty = int((current_capital * Config.MAX_EXPOSURE_PER_TRADE) / data_handler.get_ltp(stock1) or 1)
+                if signal == "BUY_SPREAD":  # Long stock1, Short stock2
                     print("Executing BUY SPREAD")
-                    executor.execute_trade(stock1, "BUY", 10, reason)
-                    # executor.execute_trade(stock2, "SELL", 10, reason) # Shorting requires specific setup
-                elif signal == "SELL_SPREAD": # Short stock1, Long stock2
+                    executor.execute_trade(stock1, "BUY", max_qty, reason, current_capital)
+                    # executor.execute_trade(stock2, "SELL", max_qty, reason, current_capital)  # Shorting requires specific setup
+                elif signal == "SELL_SPREAD":  # Short stock1, Long stock2
                     print("Executing SELL SPREAD")
-                    # executor.execute_trade(stock1, "SELL", 10, reason)
-                    executor.execute_trade(stock2, "BUY", 10, reason)
+                    # executor.execute_trade(stock1, "SELL", max_qty, reason, current_capital)
+                    executor.execute_trade(stock2, "BUY", max_qty, reason, current_capital)
             else:
                 # Handle single instrument trade (e.g., from Dual MA Crossover)
-                executor.execute_trade(instrument, signal, 10, reason)
+                max_qty = int((current_capital * Config.MAX_EXPOSURE_PER_TRADE) / data_handler.get_ltp(instrument) or 1)
+                executor.execute_trade(instrument, signal, max_qty, reason, current_capital)
 
     except Exception as e:
         print(f"An error occurred during the trading cycle: {e}")
@@ -140,17 +146,18 @@ def main():
     # The bot now exclusively uses the autonomous selector
     strategy = select_strategy()
 
-    if Config.BACKTEST:
-        client = None
-        data_handler = DataHandler(client)
-        run_backtest(strategy, data_handler)
-        return
-
+    # Authenticate regardless of mode (required for Groww API in backtest)
     client = authenticate_groww()
     if not client:
+        print("Authentication failed. Aborting.")
         return
 
     data_handler = DataHandler(client=client)
+
+    if Config.BACKTEST:
+        run_backtest(strategy, data_handler)
+        return
+
     sentiment_analyzer = SentimentAnalyzer()
 
     with get_db() as db_session:
