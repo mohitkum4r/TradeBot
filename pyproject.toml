@@ -1,0 +1,65 @@
+[project]
+name = "autotrade"
+version = "0.3.0"
+description = "An enhanced, production-ready auto-trading system for Groww"
+authors = [
+    {name = "Mohit Kumar", email = "mo.kum4r@gmail.com"}
+]
+readme = "README.md"
+requires-python = ">=3.12.0,<4.0.0"
+dependencies = [
+    "pandas>=2.3.1,<3.0.0",
+    "requests>=2.32.4,<3.0.0",
+    "python-dotenv>=1.0.0,<2.0.0",
+    "growwapi>=0.0.8,<0.0.9",
+    "beautifulsoup4>=4.12.3,<5.0.0",
+    "ta>=0.11.0,<0.12.0",
+    "schedule>=1.2.2,<2.0.0",
+    "pyotp>=2.9.0,<3.0.0",
+    "SQLAlchemy>=2.0.29,<3.0.0",
+    "tenacity>=8.2.3,<9.0.0",
+    "statsmodels>=0.14.2,<0.15.0",
+    "yfinance>=0.2.38,<0.3.0",
+    "joblib>=1.4.2,<2.0.0",
+]
+
+[tool.poetry]
+name = "autotrade"
+version = "0.3.0"
+description = "An enhanced, production-ready auto-trading system for Groww"
+authors = ["Mohit Kumar <mo.kum4r@gmail.com>"]
+readme = "README.md"
+packages = [{include = "autotrade"}]
+
+[tool.poetry.dependencies]
+python = ">=3.12.0,<4.0.0"
+pandas = "^2.3.1"
+requests = "^2.32.4"
+python-dotenv = "^1.0.1"
+growwapi = "^0.0.8"
+beautifulsoup4 = "^4.12.3"
+ta = "^0.11.0"
+schedule = "^1.2.2"
+pyotp = "^2.9.0"
+SQLAlchemy = "^2.0.29"
+tenacity = "^8.2.3"
+statsmodels = "^0.14.2"
+yfinance = "^0.2.38"
+joblib = "^1.4.2"
+
+
+[tool.poetry.group.dev.dependencies]
+praw = "^7.7.1"
+ollama = "^0.1.7"
+numpy = "^1.26.4"
+black = "^24.4.2"
+ruff = "^0.4.4"
+mypy = "^1.10.0"
+pandas-stubs = "^2.2.1.240416"
+types-requests = "^2.31.0.20240406"
+types-beautifulsoup4 = "^4.12.0.20240406"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
