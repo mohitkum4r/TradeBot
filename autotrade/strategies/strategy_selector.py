@@ -103,16 +103,21 @@ class StrategySelector(BaseStrategy):
             print(
                 f"--- Market Regime: MODERATE TREND (ADX: {last_adx:.2f}) -> Using Dual MA Crossover ---"
             )
-            # Apply to a dynamic stock (e.g., first in STOCKS) instead of hardcoded NIFTYBEES
-            target_stock = Config.STOCKS[0] if Config.STOCKS else "RELIANCE"  # Default to first stock or fallback
-            # Extract data for the target stock from full_data
-            if isinstance(full_data.columns, pd.MultiIndex):
-                stock_data = full_data[target_stock]
-            else:
-                stock_data = full_data  # Fallback if not multi-index
-            signal, reason = self.moderate_trend_strategy.generate_signal(stock_data)
-            print(f"Generated signal: {signal} | Reason: {reason}")
-            return target_stock, signal, reason
+            signals = []
+            target_stocks = Config.STOCKS if Config.MULTI_STOCK_TRADING_ENABLED else [Config.STOCKS[0]] if Config.STOCKS else ["RELIANCE"]
+            for stock in target_stocks:
+                # Extract data for the stock from full_data
+                if isinstance(full_data.columns, pd.MultiIndex):
+                    stock_data = full_data[stock]
+                else:
+                    stock_data = full_data  # Fallback if not multi-index
+                if len(stock_data) < max(Config.MA_SHORT_WINDOW, Config.MA_LONG_WINDOW) + 1:
+                    continue  # Skip if insufficient data for this stock
+                signal, reason = self.moderate_trend_strategy.generate_signal(stock_data)
+                if signal != "HOLD":
+                    signals.append((stock, signal, reason))
+                    print(f"Generated signal for {stock}: {signal} | Reason: {reason}")
+            return signals if signals else ("HOLD", "", "No moderate trend signals across stocks.")
 
         elif high_vol:
             print(

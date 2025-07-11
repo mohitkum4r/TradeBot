@@ -78,9 +78,14 @@ def run_backtest(strategy: BaseStrategy, data_handler: DataHandler):
                 if np.isnan(current_price):
                     continue
 
-                # Dynamic position sizing based on ATR (risk control)
-                atr = ta.volatility.AverageTrueRange(high=current_slice[(stock, "high")], low=current_slice[(stock, "low")], close=current_slice[(stock, "close")]).average_true_range().iloc[-1]
-                position_size = int((cash * Config.RISK_PER_TRADE) / (atr or 1))  # Size based on volatility
+                # Dynamic position sizing based on ATR (risk control) - handle NaN ATR
+                try:
+                    atr = ta.volatility.AverageTrueRange(high=current_slice[(stock, "high")], low=current_slice[(stock, "low")], close=current_slice[(stock, "close")]).average_true_range().iloc[-1]
+                    if np.isnan(atr):
+                        atr = current_price * 0.01  # Default to 1% of price if ATR NaN
+                except:
+                    atr = current_price * 0.01  # Fallback
+                position_size = int((cash * Config.RISK_PER_TRADE) / atr)  # Size based on volatility
 
                 if signal == "BUY" and positions[stock] == 0:
                     capital_to_use = min(cash * Config.MAX_EXPOSURE_PER_TRADE, cash * Config.RISK_PER_TRADE)
@@ -148,9 +153,14 @@ def run_backtest(strategy: BaseStrategy, data_handler: DataHandler):
                 if np.isnan(current_price):
                     continue
 
-                # Dynamic position sizing based on ATR (risk control)
-                atr = ta.volatility.AverageTrueRange(high=current_slice[(stock, "high")], low=current_slice[(stock, "low")], close=current_slice[(stock, "close")]).average_true_range().iloc[-1]
-                position_size = int((cash * Config.RISK_PER_TRADE) / (atr or 1))  # Size based on volatility
+                # Dynamic position sizing based on ATR (risk control) - handle NaN ATR
+                try:
+                    atr = ta.volatility.AverageTrueRange(high=current_slice[(stock, "high")], low=current_slice[(stock, "low")], close=current_slice[(stock, "close")]).average_true_range().iloc[-1]
+                    if np.isnan(atr):
+                        atr = current_price * 0.01  # Default to 1% of price if ATR NaN
+                except:
+                    atr = current_price * 0.01  # Fallback
+                position_size = int((cash * Config.RISK_PER_TRADE) / atr)  # Size based on volatility
 
                 if signal == "BUY" and positions[stock] == 0:
                     capital_to_use = min(cash * Config.MAX_EXPOSURE_PER_TRADE, cash * Config.RISK_PER_TRADE)

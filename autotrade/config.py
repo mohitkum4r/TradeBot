@@ -68,14 +68,19 @@ class Config:
     STAMP_DUTY = 0.00015  # 0.015% on buy
 
     # New: Strategy Parameters (for optimization)
-    ADX_PERIOD = 14
-    TREND_THRESHOLD = 25
-    STRONG_TREND_THRESHOLD = 40
-    VOL_BREAKOUT_WINDOW = 20
-    RSI_PERIOD = 14
-    RSI_DIVERGENCE_WINDOW = 14
+    ADX_PERIOD = int(os.getenv("ADX_PERIOD", 14))
+    TREND_THRESHOLD = int(os.getenv("TREND_THRESHOLD", 20))  # Lowered default
+    STRONG_TREND_THRESHOLD = int(os.getenv("STRONG_TREND_THRESHOLD", 35))  # Lowered default
+    VOL_BREAKOUT_WINDOW = int(os.getenv("VOL_BREAKOUT_WINDOW", 20))
+    RSI_PERIOD = int(os.getenv("RSI_PERIOD", 14))
+    RSI_DIVERGENCE_WINDOW = int(os.getenv("RSI_DIVERGENCE_WINDOW", 14))
+    MA_SHORT_WINDOW = int(os.getenv("MA_SHORT_WINDOW", 10))  # Shorter for more signals
+    MA_LONG_WINDOW = int(os.getenv("MA_LONG_WINDOW", 30))   # Shorter for more signals
 
     # New: Backtest Parameters (to avoid invalid interval/rate limits)
-    BACKTEST_DAYS = int(os.getenv("BACKTEST_DAYS", 180))  # Default 180 days
-    BACKTEST_INTERVAL_MINUTES = int(os.getenv("BACKTEST_INTERVAL_MINUTES", 1440))  # Default daily
+    BACKTEST_DAYS = int(os.getenv("BACKTEST_DAYS", 300))  # Increased default
+    BACKTEST_INTERVAL_MINUTES = int(os.getenv("BACKTEST_INTERVAL_MINUTES", 500))  # Finer interval
     FETCH_DELAY_SECONDS = float(os.getenv("FETCH_DELAY_SECONDS", 2.0))  # Delay between sequential fetches
+
+    # New: Multi-Stock Trading Toggle
+    MULTI_STOCK_TRADING_ENABLED = os.getenv("MULTI_STOCK_TRADING_ENABLED", True)  # Enable multi-stock signals
