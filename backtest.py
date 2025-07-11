@@ -14,7 +14,7 @@ def run_backtest(strategy: BaseStrategy, data_handler: DataHandler):
     print(f"\n--- Starting backtest for strategy: {strategy.__class__.__name__} ---")
 
     # Backtest on entire universe with configurable params to avoid API limits
-    stock_universe = Config.STOCKS
+    stock_universe = Config.STOCKS + ['NIFTYBEES']  # Add ETF for moderate trend signals
     historical_data = data_handler.get_historical_data(
         stock_universe,
         days=Config.BACKTEST_DAYS,
@@ -38,6 +38,7 @@ def run_backtest(strategy: BaseStrategy, data_handler: DataHandler):
     positions = {stock: 0 for stock in stock_universe}
     buy_prices = {stock: 0 for stock in stock_universe}
     daily_values = []
+    trailing_stop_pct = 0.05  # 5% trailing stop for profitability
 
     print(f"Backtesting on {len(stock_universe)} stocks...")
 
@@ -59,9 +60,14 @@ def run_backtest(strategy: BaseStrategy, data_handler: DataHandler):
             data=current_nifty_slice,
             full_stock_data=current_slice
         )
+        print(f"Signals at step {i}: {signals}")  # Debug logging for signals
 
+        # Handle list of signals
         if isinstance(signals, list):
-            for stock, signal, reason in signals:
+            for signal_tuple in signals:
+                if len(signal_tuple) != 3:
+                    continue
+                stock, signal, reason = signal_tuple
                 if stock not in stock_universe or stock not in historical_data or historical_data[stock].empty:
                     continue
                 current_price = current_slice[(stock, "close")].iloc[-1] if (stock, "close") in current_slice.columns else np.nan
@@ -88,6 +94,85 @@ def run_backtest(strategy: BaseStrategy, data_handler: DataHandler):
                     cash += total_revenue
                     pnl = (current_price - buy_prices[stock]) * positions[stock] - taxes
                     print(f"SELL {positions[stock]} {stock} @ {current_price:.2f} | PnL: {pnl:.2f} | Reason: {reason}")
+                    positions[stock] = 0
+
+        # Handle single tuple signals (e.g., from pairs)
+        elif isinstance(signals, tuple):
+            instrument, signal, reason = signals
+            if signal in ["BUY_SPREAD", "SELL_SPREAD"]:
+                # Simulate spread trade (long one, short one - assuming no actual shorting, just log for now)
+                stock1, stock2 = instrument.split(',')
+                if stock1 not in stock_universe or stock2 not in stock_universe:
+                    continue
+                price1 = current_slice[(stock1, "close")].iloc[-1] if (stock1, "close") in current_slice.columns else np.nan
+                price2 = current_slice[(stock2, "close")].iloc[-1] if (stock2, "close") in current_slice.columns else np.nan
+                if np.isnan(price1) or np.isnan(price2):
+                    continue
+                capital_to_use = min(cash * Config.MAX_EXPOSURE_PER_TRADE, cash * Config.RISK_PER_TRADE)
+                qty1 = int(capital_to_use / price1)
+                qty2 = int(capital_to_use / price2)
+                if qty1 > 0 and qty2 > 0:
+                    # Simulate buy long, sell short (note: shorting not fully implemented)
+                    if signal == "BUY_SPREAD":
+                        # Long stock1, Short stock2
+                        cost = price1 * qty1 * 1.001
+                        revenue = price2 * qty2 * 0.999  # Simulated short sell
+                        taxes = tax_calculator.calculate_taxes(cost, "BUY") + tax_calculator.calculate_taxes(revenue, "SELL")
+                        net = revenue - cost - taxes
+                        cash += net
+                        print(f"BUY_SPREAD: Long {qty1} {stock1} @ {price1:.2f}, Short {qty2} {stock2} @ {price2:.2f} | Net: {net:.2f} | Reason: {reason}")
+                    elif signal == "SELL_SPREAD":
+                        # Short stock1, Long stock2
+                        revenue = price1 * qty1 * 0.999  # Simulated short sell
+                        cost = price2 * qty2 * 1.001
+                        taxes = tax_calculator.calculate_taxes(revenue, "SELL") + tax_calculator.calculate_taxes(cost, "BUY")
+                        net = revenue - cost - taxes
+                        cash += net
+                        print(f"SELL_SPREAD: Short {qty1} {stock1} @ {price1:.2f}, Long {qty2} {stock2} @ {price2:.2f} | Net: {net:.2f} | Reason: {reason}")
+            else:
+                stock = instrument
+                if stock not in stock_universe or stock not in historical_data or historical_data[stock].empty:
+                    continue
+                current_price = current_slice[(stock, "close")].iloc[-1] if (stock, "close") in current_slice.columns else np.nan
+                if np.isnan(current_price):
+                    continue
+
+                if signal == "BUY" and positions[stock] == 0:
+                    capital_to_use = min(cash * Config.MAX_EXPOSURE_PER_TRADE, cash * Config.RISK_PER_TRADE)
+                    quantity = int(capital_to_use / current_price)
+                    if quantity > 0:
+                        cost = current_price * quantity * 1.001  # Simulate slippage
+                        taxes = tax_calculator.calculate_taxes(cost, "BUY")
+                        total_cost = cost + taxes
+                        if cash >= total_cost:
+                            cash -= total_cost
+                            positions[stock] = quantity
+                            buy_prices[stock] = current_price
+                            print(f"BUY {quantity} {stock} @ {current_price:.2f} | Reason: {reason}")
+
+                elif signal == "SELL" and positions[stock] > 0:
+                    revenue = current_price * positions[stock] * 0.999  # Slippage
+                    taxes = tax_calculator.calculate_taxes(revenue, "SELL")
+                    total_revenue = revenue - taxes
+                    cash += total_revenue
+                    pnl = (current_price - buy_prices[stock]) * positions[stock] - taxes
+                    print(f"SELL {positions[stock]} {stock} @ {current_price:.2f} | PnL: {pnl:.2f} | Reason: {reason}")
+                    positions[stock] = 0
+
+        # Apply trailing stop for open positions (to lock profits)
+        for stock in list(positions.keys()):
+            if positions[stock] > 0:
+                current_price = current_slice[(stock, "close")].iloc[-1] if (stock, "close") in current_slice.columns else np.nan
+                if np.isnan(current_price):
+                    continue
+                peak_price = max(buy_prices[stock], current_price)  # Simple trailing
+                if current_price < peak_price * (1 - trailing_stop_pct):
+                    revenue = current_price * positions[stock] * 0.999
+                    taxes = tax_calculator.calculate_taxes(revenue, "SELL")
+                    total_revenue = revenue - taxes
+                    cash += total_revenue
+                    pnl = (current_price - buy_prices[stock]) * positions[stock] - taxes
+                    print(f"TRAILING STOP SELL {positions[stock]} {stock} @ {current_price:.2f} | PnL: {pnl:.2f}")
                     positions[stock] = 0
 
         # Update portfolio value

@@ -13,15 +13,19 @@ class DualMaCrossoverStrategy(BaseStrategy):
     Source: Algorithmic Trading NSE Strategies_.docx [cite: 1373, 1375]
     """
 
-    def __init__(self, short_window=50, long_window=200):
+    def __init__(self, short_window=20, long_window=50):  # Shortened for more signals
         self.short_window = short_window
         self.long_window = long_window
 
     def generate_signal(
         self, data: pd.DataFrame, sentiment_score: float = 0.0
     ) -> tuple[str, str]:
-        if len(data) < self.long_window:
-            return "HOLD", "Insufficient historical data for long-term MA."
+        min_length = max(self.short_window, self.long_window) + 1
+        if len(data) < min_length:
+            return "HOLD", f"Insufficient historical data (need {min_length} points)."
+
+        # Make a copy to avoid SettingWithCopyWarning
+        data = data.copy()
 
         # Calculate short and long term Exponential Moving Averages (EMAs)
         # EMAs give more weight to recent prices, making them more responsive. [cite: 1296]
