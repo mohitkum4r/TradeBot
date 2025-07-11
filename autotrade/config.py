@@ -1,81 +1,123 @@
 import os
 from dotenv import load_dotenv
 
+# Load environment variables from a .env file at the project root
 load_dotenv()
+
+
+def _get_env_bool(var_name: str, default: bool = False) -> bool:
+    """Safely retrieves a boolean value from environment variables."""
+    return os.getenv(var_name, str(default)).lower() in ("true", "1", "t")
+
+
+def _get_env_list(var_name: str, default: str = "") -> list[str]:
+    """Safely retrieves a list of strings from a comma-separated environment variable."""
+    value = os.getenv(var_name, default)
+    return [item.strip() for item in value.split(',') if item.strip()]
+
+
+def _get_env_pairs(var_name: str, default: str = "") -> list[list[str]]:
+    """
+    Safely retrieves a list of stock pairs from a comma-separated,
+    dash-delimited environment variable (e.g., "STOCKA-STOCKB,STOCKC-STOCKD").
+    """
+    value = os.getenv(var_name, default)
+    pairs_str_list = [item.strip() for item in value.split(',') if item.strip()]
+    parsed_pairs = []
+    for pair_str in pairs_str_list:
+        parts = [p.strip() for p in pair_str.split('-') if p.strip()]
+        if len(parts) == 2:
+            parsed_pairs.append(parts)
+    return parsed_pairs
 
 
 class Config:
     """
-    Centralized configuration for the application.
-    Loads settings from environment variables.
+    Centralized configuration hub for the auto-trading application.
+    It safely loads all settings from environment variables and provides
+    sensible defaults to ensure stability and prevent accidental live trading.
     """
 
-    # --- Application Settings ---
-    MODE = os.getenv("MODE", "PAPER")  # 'LIVE' or 'PAPER'
-    BACKTEST = os.getenv("BACKTEST", "False").lower() in ("true", "1")
-    POLL_INTERVAL_SECONDS = int(
-        os.getenv("POLL_INTERVAL_SECONDS", 300)
-    )  # Interval for trading cycle
+    # --- I. Execution Control ---
+    # Defines the core operational mode of the bot.
+    # 'PAPER' -> Simulates trades with live data. No real money involved.
+    # 'LIVE' -> Executes real trades. USE WITH EXTREME CAUTION.
+    MODE = os.getenv("MODE", "PAPER")
 
-    # --- Trading Parameters ---
-    STOCKS = os.getenv("STOCKS", "RELIANCE,TCS,INFY,HDFCBANK,ICICIBANK").split(",")
-    INITIAL_CAPITAL = float(os.getenv("INITIAL_CAPITAL", 100000.0))
-    MAX_EXPOSURE_PER_TRADE = float(
-        os.getenv("MAX_EXPOSURE_PER_TRADE", 0.1)
-    )  # 10% of capital per trade
-    STOP_LOSS_PERCENT = float(os.getenv("STOP_LOSS_PERCENT", 0.02))  # 2% stop loss
-    TAKE_PROFIT_PERCENT = float(
-        os.getenv("TAKE_PROFIT_PERCENT", 0.05)
-    )  # 5% take profit
-    USE_TRAILING_STOP = os.getenv("USE_TRAILING_STOP", "True").lower() in ("true", "1")
-    TRAILING_STOP_PERCENT = float(
-        os.getenv("TRAILING_STOP_PERCENT", 0.015)
-    )  # 1.5% trailing stop
+    # Determines whether to run a backtest on historical data or run the bot live/paper.
+    # Defaults to True for safety, requiring explicit change to run the main bot.
+    BACKTEST = _get_env_bool("BACKTEST", True)
 
-    # --- Database ---
-    DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///trades.db")
+    # The interval in seconds for the main trading loop to fetch data and check signals.
+    POLL_INTERVAL_SECONDS = int(os.getenv("POLL_INTERVAL_SECONDS", 60))
 
-    # --- Groww API Authentication ---
+    # --- II. API Credentials ---
+    # Your brokerage API credentials. These should be kept secret.
     API_KEY = os.getenv("API_KEY")
     API_SECRET = os.getenv("API_SECRET")
 
-    # --- Sentiment Analysis ---
-    SENTIMENT_ANALYSIS_ENABLED = os.getenv(
-        "SENTIMENT_ANALYSIS_ENABLED", "False"
-    ).lower() in ("true", "1")
+    # --- III. Trading & Risk Management ---
+    # The list of NSE stock symbols the bot is allowed to trade.
+    STOCKS = _get_env_list(
+        "STOCKS", "RELIANCE,TCS,INFY,HDFCBANK,ICICIBANK,SBIN,AXISBANK"
+    )
+
+    # The total virtual capital available for trading.
+    INITIAL_CAPITAL = float(os.getenv("INITIAL_CAPITAL", 100000.0))
+
+    # The maximum percentage of capital to be allocated to any single trade.
+    MAX_EXPOSURE_PER_TRADE = float(os.getenv("MAX_EXPOSURE_PER_TRADE", 0.1))
+
+    # --- IV. Strategy & Model Configuration ---
+    # The primary strategy to be used. 'AUTONOMOUS' is recommended as it dynamically
+    # selects the best strategy based on market conditions.
+    STRATEGY = os.getenv("STRATEGY", "AUTONOMOUS")
+
+    # Default list of correlated stock pairs for the Pairs Trading Strategy.
+    # This list is used if no `PAIRS_LIST` is specified in the .env file.
+    DEFAULT_PAIRS = (
+        "ICICIBANK-HDFCBANK,"
+        "AXISBANK-KOTAKBANK,"
+        "SBIN-HDFCBANK,"
+        "TCS-INFY,"
+        "HCLTECH-WIPRO,"
+        "TATASTEEL-HINDALCO,"
+        "RELIANCE-JIOFIN,"
+        "PFC-RECLTD,"
+        "TATAMOTORS-MARUTI,"
+        "HAL-BDL"
+    )
+    PAIRS_LIST = _get_env_pairs("PAIRS_LIST", DEFAULT_PAIRS)
+
+    # Path for the machine learning model file.
+    ML_MODEL_PATH = os.getenv("ML_MODEL_PATH", "model.pkl")
+
+    # --- V. Strategy-Specific Parameters ---
+    # These can be fine-tuned in the .env file to optimize strategy performance.
+    VOLATILITY_BREAKOUT_WINDOW = int(os.getenv("VOLATILITY_BREAKOUT_WINDOW", 20))
+    VOLATILITY_BREAKOUT_MULTIPLIER = float(
+        os.getenv("VOLATILITY_BREAKOUT_MULTIPLIER", 2.5)
+    )
+    RSI_DIVERGENCE_PERIOD = int(os.getenv("RSI_DIVERGENCE_PERIOD", 14))
+    RSI_DIVERGENCE_LOOKBACK = int(os.getenv("RSI_DIVERGENCE_LOOKBACK", 20))
+
+    # --- VI. Optional: Sentiment Analysis ---
+    SENTIMENT_ANALYSIS_ENABLED = _get_env_bool("SENTIMENT_ANALYSIS_ENABLED", False)
     OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "mistral")
     REDDIT_CLIENT_ID = os.getenv("REDDIT_CLIENT_ID")
     REDDIT_CLIENT_SECRET = os.getenv("REDDIT_CLIENT_SECRET")
     REDDIT_USER_AGENT = os.getenv(
-        "REDDIT_USER_AGENT", "python:autotrade:v0.3.0 (by /u/your_username)"
+        "REDDIT_USER_AGENT", "python:autotrade:v0.3.0 (by u/your_username)"
     )
 
-    # --- Tax Configuration (for Indian markets) ---
-    STT_CHARGE = 0.001  # Example value for delivery sell
-    TRANSACTION_CHARGE = 0.0000345  # Example for NSE
+    # --- VII. Miscellaneous ---
+    # Database connection string.
+    DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///trades.db")
+
+    # Standard tax and charges for Indian markets (can be adjusted for accuracy).
+    STT_CHARGE = 0.001
+    TRANSACTION_CHARGE = 0.0000345
     GST_ON_TRANSACTION_CHARGE = 0.18
     SEBI_CHARGE = 10 / 1_00_00_000
-    STAMP_DUTY = 0.00015  # Example for buy orders
+    STAMP_DUTY = 0.00015
 
-    # --- Strategy Configuration ---
-    # Main strategy selector switch. 'AUTONOMOUS' is recommended.
-    # Options: 'AUTONOMOUS', 'MOMENTUM', 'MEAN_REVERSION', 'DUAL_MA_CROSSOVER', etc.
-    STRATEGY = os.getenv("STRATEGY", "AUTONOMOUS")
-
-    # --- Pairs Trading ---
-    PAIRS_LIST = [
-        p.split('-') for p in os.getenv("PAIRS_LIST", "ICICIBANK-HDFCBANK,RELIANCE-TCS").split(',')
-    ]
-
-
-    # --- Volatility Breakout Strategy ---
-    VOLATILITY_BREAKOUT_WINDOW = int(os.getenv("VOLATILITY_BREAKOUT_WINDOW", 20))
-    VOLATILITY_BREAKOUT_MULTIPLIER = float(os.getenv("VOLATILITY_BREAKOUT_MULTIPLIER", 2.5))
-
-    # --- RSI Divergence ---
-    RSI_DIVERGENCE_PERIOD = int(os.getenv("RSI_DIVERGENCE_PERIOD", 14))
-    RSI_DIVERGENCE_LOOKBACK = int(os.getenv("RSI_DIVERGENCE_LOOKBACK", 20))
-
-
-    # --- ML Strategy ---
-    ML_MODEL_PATH = os.getenv("ML_MODEL_PATH", "model.pkl")
