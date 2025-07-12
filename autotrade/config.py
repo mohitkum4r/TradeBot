@@ -69,7 +69,7 @@ class Config:
 
     # New: Strategy Parameters (for optimization)
     ADX_PERIOD = int(os.getenv("ADX_PERIOD", 14))
-    TREND_THRESHOLD = int(os.getenv("TREND_THRESHOLD", 20))  # Lowered default
+    TREND_THRESHOLD = int(os.getenv("TREND_THRESHOLD", 15))  # Lowered default
     STRONG_TREND_THRESHOLD = int(os.getenv("STRONG_TREND_THRESHOLD", 35))  # Lowered default
     VOL_BREAKOUT_WINDOW = int(os.getenv("VOL_BREAKOUT_WINDOW", 20))
     RSI_PERIOD = int(os.getenv("RSI_PERIOD", 14))
@@ -78,6 +78,9 @@ class Config:
     MA_LONG_WINDOW = int(os.getenv("MA_LONG_WINDOW", 30))   # Shorter for more signals
     ENTRY_Z = float(os.getenv("ENTRY_Z", 1.5))  # Lower for more arbitrage trades
     VOLUME_MULTIPLIER = float(os.getenv("VOLUME_MULTIPLIER", 1.2))  # For signal confirmation
+    RSI_BUY_THRESHOLD = int(os.getenv("RSI_BUY_THRESHOLD", 40))  # Buy only if RSI > this
+    ADX_SELL_CONFIRM = int(os.getenv("ADX_SELL_CONFIRM", 25))  # Sell only if ADX > this (trending)
+    COOLDOWN_AFTER_LOSS = int(os.getenv("COOLDOWN_AFTER_LOSS", 5))
 
     # New: Backtest Parameters (to avoid invalid interval/rate limits)
     BACKTEST_DAYS = int(os.getenv("BACKTEST_DAYS", 2))  # Increased to 2 years for more data
@@ -99,7 +102,7 @@ class Config:
     MULTI_STOCK_TRADING_ENABLED = os.getenv("MULTI_STOCK_TRADING_ENABLED", True)  # Enable multi-stock signals
 
     # MODIFIED: Optimizations for profit maximization
-    VOLUME_CONFIRMATION_MULTIPLIER = float(os.getenv("VOLUME_CONFIRMATION_MULTIPLIER", 1.2))  # For signal confirmation
+    VOLUME_CONFIRMATION_MULTIPLIER = float(os.getenv("VOLUME_CONFIRMATION_MULTIPLIER", 1))  # For signal confirmation
     VWAP_WINDOW = int(os.getenv("VWAP_WINDOW", 20))  # For new VWAP strategy
     HEDGE_THRESHOLD = float(os.getenv("HEDGE_THRESHOLD", 0.05))  # For enhanced arbitrage
 
