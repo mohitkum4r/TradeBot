@@ -1,5 +1,4 @@
-from datetime import datetime
-from typing import Dict
+from datetime import datetime, timedelta  # For settlement dates
 
 import pandas as pd
 import numpy as np
@@ -12,8 +11,15 @@ from autotrade.strategies.base_strategy import BaseStrategy
 from autotrade.services.data_handler import DataHandler
 from autotrade.config import Config
 from autotrade.services import tax_calculator
-# NEW: For LLM review
+# For LLM review
 import ollama
+# For ML training
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score
+from sklearn.preprocessing import LabelEncoder  # For encoding signals
+from joblib import dump, load  # To save/load model
+from typing import Dict, List
 
 
 def run_backtest(strategy: BaseStrategy, data_handler: DataHandler):
@@ -44,6 +50,8 @@ def run_backtest(strategy: BaseStrategy, data_handler: DataHandler):
     # --- Simulation Setup ---
     initial_capital = Config.INITIAL_CAPITAL
     cash = initial_capital
+    # NEW: Pending cash for T+1 settlements (list of {'amount': float, 'release_step': int})
+    pending_cash = []
     positions = {stock: 0 for stock in stock_universe}
     buy_prices = {stock: 0 for stock in stock_universe}
     peak_prices = {stock: 0 for stock in stock_universe}  # For trailing stop
@@ -52,7 +60,7 @@ def run_backtest(strategy: BaseStrategy, data_handler: DataHandler):
     take_profit_pct = Config.TAKE_PROFIT_PCT
     trades = []  # List to track trades for metrics (e.g., [{'stock': 'ABC', 'entry_price': 100, 'exit_price': 110, 'pnl': 10, 'type': 'win'}])
     # NEW: Detailed logs for all data (signals, features, regimes) for examiner and LLM
-    detailed_logs = []  # List of dicts: {'step': i, 'regime': str, 'signals': list/tuple, 'features': dict, 'positions': dict, 'cash': float, 'market_snapshot': dict of DFs}
+    detailed_logs = []  # List of dicts: {'step': i, 'regime': str, 'signals': list/tuple, 'features': dict, 'positions': dict, 'cash': float, 'market_snapshot': dict of DFs, 'optimal_signal': dict}  # Added optimal for ML
 
     print(f"Backtesting on {len(stock_universe)} stocks...")
 
@@ -65,12 +73,23 @@ def run_backtest(strategy: BaseStrategy, data_handler: DataHandler):
         return
     min_length = len(combined_df)
 
+    # NEW: Steps per "day" for settlement (e.g., 390 for 1-min in 6.5hr day; adjust based on interval)
+    steps_per_day = int(
+        390 / Config.BACKTEST_INTERVAL_MINUTES) if Config.BACKTEST_INTERVAL_MINUTES > 0 else 1  # Avoid division by zero
+
     # NEW: Cumulative ideal PnL tracker (updated per step)
     cumulative_ideal_pnl = 0.0
 
     for i in range(1, min_length):
         current_slice = combined_df.iloc[:i]
         current_nifty_slice = nifty_data.iloc[:i] if not nifty_data.empty else pd.DataFrame()
+
+        # NEW: Release pending cash (T+1 simulation)
+        pending_to_release = [p for p in pending_cash if p['release_step'] <= i]
+        for p in pending_to_release:
+            cash += p['amount']
+            pending_cash.remove(p)
+            print(f"Released pending cash ₹{p['amount']:.2f} at step {i} (T+1 settlement)")
 
         # Generate signals for portfolio
         signals = strategy.generate_signal(
@@ -109,12 +128,33 @@ def run_backtest(strategy: BaseStrategy, data_handler: DataHandler):
             else:
                 features[stock] = {'adx': None, 'atr': None, 'rsi': None}
 
-        # NEW: Log everything, even HOLD signals
+        # NEW: Compute optimal signals per stock for ML learning (using future data - cheating for training only)
+        optimal_signals = {}
+        for stock in stock_universe:
+            if (stock, 'close') in combined_df.columns:
+                full_stock_data = combined_df[stock]  # Full future data for this stock
+                if i < len(full_stock_data) - 1:  # Need next point for prediction
+                    current_close = full_stock_data['close'].iloc[i - 1]  # Current at step i
+                    next_close = full_stock_data['close'].iloc[i]  # "Future" next step
+                    price_change_pct = (next_close - current_close) / current_close
+                    if price_change_pct > 0.01:  # Arbitrary threshold for BUY (1% rise)
+                        optimal_signals[stock] = 'BUY'
+                    elif price_change_pct < -0.01:  # 1% drop for SELL
+                        optimal_signals[stock] = 'SELL'
+                    else:
+                        optimal_signals[stock] = 'HOLD'
+                else:
+                    optimal_signals[stock] = 'HOLD'  # No future data
+            else:
+                optimal_signals[stock] = 'HOLD'
+
+        # NEW: Log everything, even HOLD signals, with optimal for ML
         step_log = {
             'step': i,
             'regime': 'Unknown',  # Update based on ADX (set in regime logic below)
             'signals': signals,  # All signals, including HOLD
             'features': features,  # Computed indicators per stock
+            'optimal_signals': optimal_signals,  # NEW: For ML training
             'positions': positions.copy(),
             'cash': cash,
             'market_snapshot': {stock: current_slice[stock].iloc[-1].to_dict() for stock in stock_universe if
@@ -187,7 +227,10 @@ def run_backtest(strategy: BaseStrategy, data_handler: DataHandler):
                     revenue = current_price * positions[stock] * 0.999  # Slippage
                     taxes = tax_calculator.calculate_taxes(revenue, "SELL")
                     total_revenue = revenue - taxes
-                    cash += total_revenue
+                    # NEW: Add to pending_cash for T+1 settlement (not immediate cash)
+                    release_step = i + steps_per_day  # Release next "day"
+                    pending_cash.append({'amount': total_revenue, 'release_step': release_step})
+                    print(f"SELL added to pending settlement: ₹{total_revenue:.2f} available at step {release_step}")
                     pnl = (current_price - buy_prices[stock]) * positions[stock] - taxes
                     print(f"SELL {positions[stock]} {stock} @ {current_price:.2f} | PnL: {pnl:.2f} | Reason: {reason}")
                     # Record trade
@@ -294,7 +337,10 @@ def run_backtest(strategy: BaseStrategy, data_handler: DataHandler):
                     revenue = current_price * positions[stock] * 0.999  # Slippage
                     taxes = tax_calculator.calculate_taxes(revenue, "SELL")
                     total_revenue = revenue - taxes
-                    cash += total_revenue
+                    # NEW: Add to pending_cash for T+1 settlement (not immediate cash)
+                    release_step = i + steps_per_day  # Release next "day"
+                    pending_cash.append({'amount': total_revenue, 'release_step': release_step})
+                    print(f"SELL added to pending settlement: ₹{total_revenue:.2f} available at step {release_step}")
                     pnl = (current_price - buy_prices[stock]) * positions[stock] - taxes
                     print(f"SELL {positions[stock]} {stock} @ {current_price:.2f} | PnL: {pnl:.2f} | Reason: {reason}")
                     # Record trade
@@ -322,7 +368,10 @@ def run_backtest(strategy: BaseStrategy, data_handler: DataHandler):
                     revenue = current_price * positions[stock] * 0.999
                     taxes = tax_calculator.calculate_taxes(revenue, "SELL")
                     total_revenue = revenue - taxes
-                    cash += total_revenue
+                    # NEW: Pending for T+1
+                    release_step = i + steps_per_day
+                    pending_cash.append({'amount': total_revenue, 'release_step': release_step})
+                    print(f"TRAILING STOP SELL added to pending: ₹{total_revenue:.2f} at step {release_step}")
                     pnl = (current_price - buy_prices[stock]) * positions[stock] - taxes
                     print(f"TRAILING STOP SELL {positions[stock]} {stock} @ {current_price:.2f} | PnL: {pnl:.2f}")
                     # Record trade
@@ -338,7 +387,10 @@ def run_backtest(strategy: BaseStrategy, data_handler: DataHandler):
                     revenue = current_price * positions[stock] * 0.999
                     taxes = tax_calculator.calculate_taxes(revenue, "SELL")
                     total_revenue = revenue - taxes
-                    cash += total_revenue
+                    # NEW: Pending for T+1
+                    release_step = i + steps_per_day
+                    pending_cash.append({'amount': total_revenue, 'release_step': release_step})
+                    print(f"TAKE PROFIT SELL added to pending: ₹{total_revenue:.2f} at step {release_step}")
                     pnl = (current_price - buy_prices[stock]) * positions[stock] - taxes
                     print(f"TAKE PROFIT SELL {positions[stock]} {stock} @ {current_price:.2f} | PnL: {pnl:.2f}")
                     # Record trade
@@ -357,9 +409,17 @@ def run_backtest(strategy: BaseStrategy, data_handler: DataHandler):
         )
         daily_values.append(portfolio_value)
 
+    # NEW: Release any remaining pending cash at end (for final value)
+    for p in pending_cash:
+        cash += p['amount']
+    final_portfolio_value = cash + sum(
+        positions[s] * combined_df[(s, "close")].iloc[-1]
+        if (s, "close") in combined_df.columns else 0
+        for s in stock_universe
+    )
+
     # --- Performance Metrics ---
     returns = pd.Series(daily_values).pct_change().dropna()
-    final_portfolio_value = daily_values[-1] if daily_values else initial_capital
     total_pnl = final_portfolio_value - initial_capital
     total_pnl_percent = (total_pnl / initial_capital) * 100 if initial_capital > 0 else 0
 
@@ -430,6 +490,9 @@ def run_backtest(strategy: BaseStrategy, data_handler: DataHandler):
         writer.writerow(performance_log)
     print("Backtest results saved to backtest_results.csv.")
 
+    # NEW: Train ML model on optimal signals from logs
+    train_ml_on_optimal(detailed_logs)
+
     # NEW: Run examiner if enabled
     if Config.EXAMINER_ENABLED:
         examine_backtest(performance_log, historical_data)
@@ -453,7 +516,76 @@ def run_backtest(strategy: BaseStrategy, data_handler: DataHandler):
     print("------------------------\n")
 
 
-# NEW: Examiner function to compute ideal path and LLM suggestions
+# NEW: Well-commented ML training function to learn from optimal signals
+def train_ml_on_optimal(detailed_logs: List[Dict]) -> None:
+    """
+    Trains a machine learning model to predict 'optimal' trading signals based on backtest logs.
+
+    Approach:
+    1. **Data Extraction:** Loop through detailed_logs to collect features (e.g., ADX, ATR, RSI) and labels ('optimal_signal' per stock/step).
+       - Features: Numerical indicators from the log (handle None as 0 for simplicity).
+       - Labels: 'BUY', 'SELL', 'HOLD' as computed in backtest (based on next price change >1% threshold).
+    2. **Preprocessing:** Flatten into a DataFrame, encode labels (e.g., BUY=0, SELL=1, HOLD=2), handle missing values.
+    3. **Training:** Use RandomForestClassifier (good for tabular data, handles non-linearity).
+       - Split 80/20 train/test, fit model, evaluate accuracy.
+    4. **Output/Save:** Print accuracy, save model as 'optimal_trade_model.joblib' for use in strategies (e.g., predict and filter signals).
+    5. **Usage in Live/Strategies:** Load model, input current features, predict signal, e.g., if predict 'BUY' with >70% prob, override rule-based.
+
+    This approximates the 'ideal' path by learning patterns that lead to profitable actions, helping close the PnL gap over time.
+    Run after backtests with sufficient logs (>100 steps) for good training.
+    """
+    print("\n--- Training ML Model on Optimal Signals ---")
+
+    # Step 1: Extract data from logs
+    ml_data = []
+    for log in detailed_logs:
+        step = log['step']
+        for stock, feats in log['features'].items():
+            optimal = log.get('optimal_signals', {}).get(stock, 'HOLD')
+            # Flatten features (add more as needed; handle None)
+            row = {
+                'step': step,
+                'stock': stock,
+                'adx': feats['adx'] if feats['adx'] is not None else 0.0,
+                'atr': feats['atr'] if feats['atr'] is not None else 0.0,
+                'rsi': feats['rsi'] if feats['rsi'] is not None else 50.0,  # Default neutral
+                'optimal_signal': optimal
+            }
+            ml_data.append(row)
+
+    if not ml_data:
+        print("No data for ML training (empty logs). Skipping.")
+        return
+
+    # Step 2: Preprocess into DataFrame
+    df = pd.DataFrame(ml_data)
+    # Features (exclude non-numeric like stock/step for now; could one-hot encode stock if needed)
+    X = df[['adx', 'atr', 'rsi']]
+    y = df['optimal_signal']
+
+    # Encode labels (BUY=0, SELL=1, HOLD=2)
+    le = LabelEncoder()
+    y_encoded = le.fit_transform(y)
+
+    # Split data (80% train, 20% test)
+    X_train, X_test, y_train, y_test = train_test_split(X, y_encoded, test_size=0.2, random_state=42)
+
+    # Step 3: Train RandomForestClassifier
+    model = RandomForestClassifier(n_estimators=100, random_state=42)
+    model.fit(X_train, y_train)
+
+    # Evaluate
+    y_pred = model.predict(X_test)
+    accuracy = accuracy_score(y_test, y_pred)
+    print(f"ML Model Accuracy on Test Set: {accuracy * 100:.2f}%")
+    print(f"Class Mapping: {dict(enumerate(le.classes_))}")  # e.g., 0: BUY, 1: HOLD, 2: SELL
+
+    # Step 4: Save model for use in strategies
+    dump(model, 'optimal_trade_model.joblib')
+    dump(le, 'optimal_label_encoder.joblib')  # Save encoder to decode predictions
+    print("Trained model saved as 'optimal_trade_model.joblib'. Load in strategies to predict optimal signals.")
+
+
 def examine_backtest(performance_log: dict, historical_data: Dict[str, pd.DataFrame]):
     print("\n--- Running Backtest Examiner ---")
 
@@ -471,13 +603,12 @@ def examine_backtest(performance_log: dict, historical_data: Dict[str, pd.DataFr
         qty = int(performance_log['initial_capital'] * 0.2 / min_price)  # 20% exposure
         ideal_profit = (max_price - min_price) * qty
         ideal_pnl[stock] = ideal_profit
-        ideal_trades.append(
-            {'stock': stock, 'buy_price': min_price, 'sell_price': max_price, 'qty': qty, 'pnl': ideal_profit})
+        ideal_trades.append({'stock': stock, 'buy_price': min_price, 'sell_price': max_price, 'qty': qty, 'pnl': ideal_profit})
 
     total_ideal_pnl = sum(ideal_pnl.values())
     actual_pnl = performance_log['total_pnl']
     pnl_gap = total_ideal_pnl - actual_pnl
-    print(f"Ideal Max PnL (Perfect Foresight): ₹{total_ideal_pnl:,.2f}")
+    print(f"Ideal Max PnL (Perfect Foresight): ₹{total_ideal_pnl:,.2f}")  # Continued from your line (completed formatting)
     print(f"Actual PnL: ₹{actual_pnl:,.2f}")
     print(f"PnL Gap: ₹{pnl_gap:,.2f} (Opportunity for optimization!)")
 
@@ -506,6 +637,7 @@ def examine_backtest(performance_log: dict, historical_data: Dict[str, pd.DataFr
     You are a trading expert. Analyze this backtest summary and suggest 3 specific, actionable optimizations to close the PnL gap and improve win rate/profit factor.
     Examples: "Lower VOLUME_MULTIPLIER to 1.0 for 20% more trades" or "Add RSI >50 filter to buys in Dual MA strategy".
     Focus on parameter tweaks, new rules, or strategy changes to maximize profits with low risk.
+    Do not describe the data structure; only provide the 3 suggestions in bullet points.
     Summary: {summary}
     """
     try:
