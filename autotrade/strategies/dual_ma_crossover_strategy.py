@@ -1,5 +1,3 @@
-# autotrade/strategies/dual_ma_crossover_strategy.py
-
 import pandas as pd
 import ta
 from .base_strategy import BaseStrategy
