@@ -34,6 +34,9 @@ mypy = "^1.10.0"
 pandas-stubs = "^2.2.1.240416"
 types-requests = "^2.31.0.20240406"
 types-beautifulsoup4 = "^4.12.0.20240406"
+pytest = "^8.4.2"
+pytest-cov = "^7.0.0"
+pytest-mock = "^3.15.1"
 
 
 [build-system]
